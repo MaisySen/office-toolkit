@@ -207,8 +207,15 @@ def admin_user_journey(auth, ctx):
 def self_registration_journey(auth, ctx):
     """Self-registration through the real Keycloak registration form,
     verify-email from the confirmation mail, then toolkit login."""
+    # The web client enforces PKCE (S256), so even page rendering needs a
+    # challenge; the verifier is unused because the flow ends at the
+    # verify-email notice, never at a code exchange.
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(secrets.token_urlsafe(48).encode()).digest()
+    ).rstrip(b"=").decode()
     params = {"response_type": "code", "client_id": "office-toolkit-web",
-              "redirect_uri": APP + "/login/oidc/callback", "scope": "openid"}
+              "redirect_uri": APP + "/login/oidc/callback", "scope": "openid",
+              "code_challenge": challenge, "code_challenge_method": "S256"}
     page = ctx.new_page()
     # Open the KC login page and follow the Register link it renders: the
     # href is KC's own registration URL with the parameters it accepts.
