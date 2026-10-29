@@ -148,7 +148,7 @@ jobs:
             http://127.0.0.1:8080/realms/office-toolkit/.well-known/openid-configuration \
             > /dev/null || { tail -40 /tmp/kc.log; exit 1; }
           curl -s --max-time 30 -o /dev/null -w 'authorize warm: %{http_code}\n' \
-            'http://127.0.0.1:8080/realms/office-toolkit/protocol/openid-connect/auth?client_id=office-toolkit-mobile&redirect_uri=officetoolkit%3A%2F%2Fauth&response_type=code&scope=openid'
+            'http://127.0.0.1:8080/realms/office-toolkit/protocol/openid-connect/auth?client_id=office-toolkit-mobile&redirect_uri=officetoolkit%3A%2F%2Fauth&response_type=code&scope=openid&code_challenge_method=S256&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'
       - name: Drive sign-in and the operation screen
         timeout-minutes: 15
         env:

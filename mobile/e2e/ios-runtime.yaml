@@ -16,9 +16,11 @@ appId: au.fintex.officetoolkit
 # iOS shows the "Wants to Use localhost to Sign In" consent sheet on
 # every fresh-install auth prompt; the conditional check raced the
 # sheet before, so wait for it deterministically.
+# The sheet took ~22s to present on a post-build runner once; it beat
+# a 20s wait by two seconds and the failure screenshot caught it.
 - extendedWaitUntil:
     visible: "Continue"
-    timeout: 20000
+    timeout: 60000
 - tapOn: "Continue"
 # A paged-out Keycloak can need well over 30s for its first page.
 - extendedWaitUntil:
