@@ -1,0 +1,36 @@
+# Full identity journey against a real maintained IdP (Keycloak) with local
+# mail capture (Mailpit). No external mail, no secrets, no accounts.
+name: oidc-e2e
+on: [push]
+jobs:
+  keycloak-journey:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Start Keycloak (dev mode) and Mailpit
+        run: |
+          docker run -d --name keycloak --network host \
+            -e KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+            -e KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+            quay.io/keycloak/keycloak:26.8 \
+            start-dev --hostname http://localhost:8080 --http-enabled true
+          docker run -d --name mailpit --network host axllent/mailpit:latest
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:9000/health/ready >/dev/null && break
+            sleep 3
+          done
+          curl -sf http://localhost:9000/health/ready
+          curl -sf http://localhost:8025/api/v1/messages
+      - name: Install toolkit
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libreoffice-writer libreoffice-calc tesseract-ocr >/dev/null
+          pip install -r requirements.txt
+      - name: Run the full journey
+        run: python scripts/keycloak_ci_journey.py
+        env:
+          KC_ADMIN: admin
+          KC_ADMIN_PASSWORD: admin
