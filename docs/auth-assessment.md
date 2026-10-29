@@ -19,6 +19,11 @@ PKCE (RFC 7636) against the toolkit's own provider.
 | Brute force on login | Per-account lockout after repeated failures | Done |
 | Bootstrap account takeover (first-run registration open on a public URL) | Registration closed unless TOOLKIT_BOOTSTRAP_TOKEN is set; token required for the first account; never exposed unauthenticated to a public network | Done |
 | Password storage | argon2id | Done |
+| Long-lived or abandoned web sessions | Absolute session age (TOOLKIT_SESSION_MAX_AGE, 12 hours by default); expired sessions, codes, tokens and OIDC states purged on each sign in | Done |
+| Logout CSRF (forced sign out from another site) | Logout is a POST carrying the synchronizer token; GET only shows a confirm button | Done |
+| JWKS fetch amplification from garbage bearer tokens | Tokens screened (shape, length, RS256 header, kid) before any key work; forced JWKS refetch at most once a minute per provider | Done |
+| Development redirect URIs or endpoints in production | Release builds refuse http or loopback endpoints in app.config.js; a production server refuses loopback or http mobile redirect URIs | Done |
+| CI password grant client reaching a real realm | CI seeding scripts run only in CI against loopback stacks (scripts/ci_guard.py); production provisioning turns the password grant off and verifies it on read back | Done |
 
 Residual risks: rate limiting is in-memory per process (not shared across
 workers); mobile deep-link interception needs claimed HTTPS redirect URIs
