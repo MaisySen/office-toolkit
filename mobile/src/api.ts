@@ -26,8 +26,13 @@ async function headers(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Thrown when the stored token is rejected (expired or revoked), so the
+// app can drop back to the sign-in screen instead of failing generically.
+export class AuthError extends Error {}
+
 export async function listOperations(baseUrl: string): Promise<Operation[]> {
   const res = await fetch(`${baseUrl}/api/operations`, { headers: await headers() });
+  if (res.status === 401) throw new AuthError("Session expired");
   if (!res.ok) throw new Error(`Server answered ${res.status}`);
   const data = await res.json();
   return data.operations as Operation[];
@@ -47,6 +52,7 @@ export async function runOperation(
     headers: await headers(),
     body: form,
   });
+  if (res.status === 401) throw new AuthError("Session expired");
   if (!res.ok) {
     let message = `Server answered ${res.status}`;
     try {

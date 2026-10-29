@@ -32,7 +32,11 @@ served as https://doctool.multies.si with Keycloak under /auth.
    (`office-toolkit-web` confidential with redirect
    `https://doctool.multies.si/login/oidc/callback`,
    `office-toolkit-mobile` public with redirect
-   `officetoolkit://auth`, PKCE S256 on both). scripts/ci_runtime_stack.py
+   `officetoolkit://auth`, PKCE S256 on both). The mobile client also
+   needs the protocol mapper that adds the `office-toolkit-api` audience
+   to its tokens: office_toolkit/web/app.py rejects bearer JWTs without
+   that aud, so a realm built without the mapper lets sign-in complete
+   and then fails every API call. scripts/ci_runtime_stack.py
    shows the exact admin-API calls the CI uses for the same setup;
    the production run differs only in base URL, redirect URIs and
    secrets.

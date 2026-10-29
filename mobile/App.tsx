@@ -7,7 +7,7 @@ import * as AuthSession from "expo-auth-session";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
-import { listOperations, runOperation, Operation } from "./src/api";
+import { listOperations, runOperation, Operation, AuthError } from "./src/api";
 import { useSignIn, signOut, isSignedIn } from "./src/auth";
 
 const baseUrl: string =
@@ -31,9 +31,19 @@ export default function App() {
     isSignedIn().then(setSignedIn);
   }, []);
 
+  const onAuthExpired = async () => {
+    await signOut();
+    setOps(null);
+    setActive(null);
+    setError("Your session expired. Sign in again.");
+    setSignedIn(false);
+  };
+
   useEffect(() => {
     if (signedIn) {
-      listOperations(baseUrl).then(setOps).catch((e) => setError(e.message));
+      listOperations(baseUrl)
+        .then(setOps)
+        .catch((e) => (e instanceof AuthError ? onAuthExpired() : setError(e.message)));
     }
   }, [signedIn]);
 
@@ -73,7 +83,8 @@ export default function App() {
       }
       setResult(`Done: ${filename}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (e instanceof AuthError) await onAuthExpired();
+      else setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }

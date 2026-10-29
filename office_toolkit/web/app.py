@@ -24,7 +24,14 @@ from office_toolkit.web.security import sniff, page_count_guard
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024  # 100 MB per request
-app.secret_key = os.environ.get("TOOLKIT_SECRET_KEY") or secrets.token_hex(32)
+# In SSO (production) mode a missing secret would mint per-process
+# sessions that silently break across workers and restarts; fail closed.
+# The random fallback stays for local development and tests only.
+_secret = os.environ.get("TOOLKIT_SECRET_KEY")
+if not _secret and os.environ.get("TOOLKIT_OIDC_ISSUER"):
+    raise RuntimeError(
+        "TOOLKIT_SECRET_KEY is required when TOOLKIT_OIDC_ISSUER is set")
+app.secret_key = _secret or secrets.token_hex(32)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
@@ -192,9 +199,10 @@ def current_user_id():
     header = request.headers.get("Authorization", "")
     if header.startswith("Bearer "):
         token = header[7:]
-        uid = auth_store.authenticate_bearer(token)
-        if uid is not None:
-            return uid
+        if local_auth_enabled():
+            uid = auth_store.authenticate_bearer(token)
+            if uid is not None:
+                return uid
         return _idp_bearer_user_id(token)
     return None
 
@@ -618,7 +626,8 @@ def login():
         flask_session["sid"] = auth_store.create_web_session(uid)
         flask_session["_csrf"] = secrets.token_urlsafe(24)
         nxt = request.args.get("next") or request.form.get("next") or "/"
-        if not nxt.startswith("/"):
+        # local paths only; "//host" is a protocol-relative external URL
+        if not nxt.startswith("/") or nxt.startswith("//"):
             nxt = "/"
         return flask_redirect(nxt)
     return render_template("auth.html", mode="login", error=None, disabled=None,
@@ -636,6 +645,8 @@ def logout():
 
 @app.route("/oauth/authorize", methods=["GET", "POST"])
 def oauth_authorize():
+    if not local_auth_enabled():
+        return "Not found", 404
     client_id = request.values.get("client_id", "")
     redirect_uri = request.values.get("redirect_uri", "")
     challenge = request.values.get("code_challenge", "")
@@ -655,6 +666,8 @@ def oauth_authorize():
 @app.post("/oauth/token")
 def oauth_token():
     from flask import jsonify
+    if not local_auth_enabled():
+        return jsonify({"error": "not_found"}), 404
     grant = request.form.get("grant_type")
     try:
         if grant == "authorization_code":
