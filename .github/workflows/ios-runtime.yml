@@ -138,6 +138,17 @@ jobs:
             exit 1
           }
           echo "$MAESTRO_DIR/bin" >> "$GITHUB_PATH"
+      - name: Re-warm Keycloak after the build window
+        # KC sat idle through ~40 minutes of xcodebuild on a
+        # memory-pressured runner; the simulator's auth session stalled
+        # on a blank page, consistent with a paged-out JVM. Warm the
+        # exact routes the login flow hits before Maestro starts.
+        run: |
+          curl -sf --max-time 30 \
+            http://127.0.0.1:8080/realms/office-toolkit/.well-known/openid-configuration \
+            > /dev/null || { tail -40 /tmp/kc.log; exit 1; }
+          curl -s --max-time 30 -o /dev/null -w 'authorize warm: %{http_code}\n' \
+            'http://127.0.0.1:8080/realms/office-toolkit/protocol/openid-connect/auth?client_id=office-toolkit-mobile&redirect_uri=officetoolkit%3A%2F%2Fauth&response_type=code&scope=openid'
       - name: Drive sign-in and the operation screen
         timeout-minutes: 15
         env:
@@ -146,9 +157,19 @@ jobs:
           # too tight and fails before the app is ever launched.
           MAESTRO_DRIVER_STARTUP_TIMEOUT: '300000'
         run: maestro test mobile/e2e/ios-runtime.yaml
+      - name: Capture Keycloak state on failure
+        if: failure()
+        run: |
+          curl -sv --max-time 10 \
+            http://127.0.0.1:8080/realms/office-toolkit/.well-known/openid-configuration \
+            -o /tmp/disc-probe.json || true
+          echo '--- kc.log tail ---'
+          tail -100 /tmp/kc.log || true
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
         if: always()
         with:
           name: ios-runtime-state
-          path: ~/.maestro/tests
+          path: |
+            ~/.maestro/tests
+            /tmp/kc.log
