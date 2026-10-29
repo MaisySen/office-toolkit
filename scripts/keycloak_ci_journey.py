@@ -75,14 +75,28 @@ def setup_realm(auth):
     cid = requests.get(f"{KC}/admin/realms/{REALM}/clients", headers=auth,
                        params={"clientId": "office-toolkit-mobile"}
                        ).json()[0]["id"]
+    mapper = {"name": "office-toolkit-api-audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              # included.client.audience only works for registered client
+              # ids; the API audience is a plain resource string.
+              "config": {"included.custom.audience": "office-toolkit-api",
+                         "id.token.claim": "false",
+                         "access.token.claim": "true"}}
     r = requests.post(
         f"{KC}/admin/realms/{REALM}/clients/{cid}/protocol-mappers/models",
-        headers=auth, json={
-            "name": "office-toolkit-api-audience", "protocol": "openid-connect",
-            "protocolMapper": "oidc-audience-mapper",
-            "config": {"included.client.audience": "office-toolkit-api",
-                       "id.token.claim": "false", "access.token.claim": "true"}})
-    if r.status_code not in (201, 409):
+        headers=auth, json=mapper)
+    if r.status_code == 409:
+        existing = requests.get(
+            f"{KC}/admin/realms/{REALM}/clients/{cid}/protocol-mappers/models",
+            headers=auth).json()
+        mid = [m["id"] for m in existing
+               if m["name"] == mapper["name"]][0]
+        mapper["id"] = mid
+        r = requests.put(
+            f"{KC}/admin/realms/{REALM}/clients/{cid}"
+            f"/protocol-mappers/models/{mid}", headers=auth, json=mapper)
+    if r.status_code not in (201, 204):
         fail(f"audience mapper: {r.status_code} {r.text[:200]}")
     # The journeys assume the stock registration flow and realm flags; a
     # silent misconfiguration would invalidate their evidence.
@@ -395,7 +409,15 @@ def mobile_pkce_journey(ctx):
         aud = [aud]
     if "office-toolkit-api" not in aud:
         fail(f"mobile access token lacks the API audience: {aud}")
-    print("mobile PKCE journey OK (token carries office-toolkit-api audience)")
+    # The full deployment chain: the real IdP token authenticates against
+    # the toolkit API (400 = authenticated, no file attached; 401 = not).
+    api = requests.post(f"{APP}/api/run/to-jpeg",
+                        headers={"Authorization": "Bearer "
+                                 + r.json()["access_token"]})
+    if api.status_code != 400:
+        fail(f"API rejected the real mobile token: {api.status_code}")
+    print("mobile PKCE journey OK (token carries office-toolkit-api "
+          "audience and authenticates against the API)")
 
 
 def main():
