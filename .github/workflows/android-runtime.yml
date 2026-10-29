@@ -1,8 +1,14 @@
-# PARKED - manual trigger only until the owner approves the Android SDK
-# License Agreement for the emulator + system-image components. This
-# workflow NEVER runs `sdkmanager --licenses` (the blanket accept): it
-# installs exactly five stable components and fails loudly if any
-# license other than android-sdk-license is accepted or requested.
+# PARKED - manual trigger only until the owner approves the standard
+# Android SDK License Agreement (https://developer.android.com/studio/terms)
+# for five stable-channel components. Permission is enforced BEFORE any
+# acceptance: scripts/ci_android_license.py validates Google's live
+# repository metadata (all five components stable-channel, carrying only
+# android-sdk-license) and requires the license text hash to equal the
+# approved pin recorded in that script; any drift refuses the job before
+# sdkmanager runs. The install then seeds only the approved license file
+# and runs with stdin closed, so an unexpected prompt fails the job
+# instead of ever being accepted. The blanket `--licenses` command is
+# never invoked.
 name: android-runtime
 on: workflow_dispatch
 jobs:
@@ -67,32 +73,31 @@ jobs:
             https://github.com/mobile-dev-inc/maestro/releases/latest/download/maestro.zip
           unzip -q -o /tmp/maestro.zip -d /tmp
           echo "$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)/bin" >> "$GITHUB_PATH"
-      - name: Install ONLY the stable emulator components (scoped license acceptance)
-        # Scoped by construction: sdkmanager prompts only for licenses
-        # attached to the packages being installed, and all five packages
-        # are stable-channel and carry only the Android SDK License
-        # Agreement (Google repository metadata, repository2-3.xml). The
-        # blanket `--licenses` command is never invoked. The job fails if
-        # anything preview-flavoured appears or if any other license file
-        # lands in the SDK licenses directory.
+      - name: Gate SDK components and license text BEFORE any acceptance
+        # Refuses (exit 1) before sdkmanager runs if any of the five
+        # components left the stable channel, carries any license other
+        # than android-sdk-license, or if the license text hash no
+        # longer equals the approved pin recorded in the script.
         run: |
-          BEFORE=$(ls "$ANDROID_HOME/licenses" 2>/dev/null | sort | tr '\n' ' ')
-          echo "licenses before: ${BEFORE:-none}"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+          python3 scripts/ci_android_license.py \
             'build-tools;37.0.0' platform-tools 'platforms;android-34' \
-            emulator 'system-images;android-34;google_apis;x86_64' 2>&1 \
-            | tee /tmp/sdk-install.log
-          ! grep -qi "preview" /tmp/sdk-install.log \
-            || { echo "preview component/license detected - refusing"; exit 1; }
-          AFTER=$(ls "$ANDROID_HOME/licenses" | sort | tr '\n' ' ')
-          echo "licenses after: $AFTER"
-          for f in $AFTER; do
-            case " $BEFORE " in
-              *" $f "*) ;;
-              *) test "$f" = "android-sdk-license" \
-                 || { echo "unexpected license accepted: $f"; exit 1; } ;;
-            esac
-          done
+            emulator 'system-images;android-34;google_apis;x86_64'
+      - name: Seed only the approved license and install (stdin closed)
+        # sdkmanager never sees an acceptance answer: the approved
+        # license is pre-recorded by its pinned hash, and stdin is
+        # closed so any unexpected prompt fails on EOF instead of being
+        # accepted. The post-check asserts no other license file exists.
+        run: |
+          mkdir -p "$ANDROID_HOME/licenses"
+          echo "a90c249c9e874a0ca1854dd16aa9827dec1430da" \
+            > "$ANDROID_HOME/licenses/android-sdk-license"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
+            'build-tools;37.0.0' platform-tools 'platforms;android-34' \
+            emulator 'system-images;android-34;google_apis;x86_64' \
+            < /dev/null 2>&1 | tee /tmp/sdk-install.log
+          test "$(ls "$ANDROID_HOME/licenses")" = "android-sdk-license" \
+            || { echo "unexpected license file appeared"; \
+                 ls -la "$ANDROID_HOME/licenses"; exit 1; }
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
           echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
