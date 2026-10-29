@@ -1,0 +1,32 @@
+name: mobile-checks
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+on:
+  push:
+    paths:
+      - ".github/workflows/mobile-checks.yml"
+      - "mobile/**"
+  pull_request:
+    paths:
+      - ".github/workflows/mobile-checks.yml"
+      - "mobile/**"
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install JS dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Unit and component tests
+        run: npx jest --ci
