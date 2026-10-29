@@ -60,6 +60,17 @@ Register <app-url>/login/oidc/callback as the redirect URI at the provider.
 SSO logins map to local accounts by email; a pre-existing password account
 with the same email is never linked silently.
 
+The mobile app talks to the same provider directly (public client with
+PKCE, client id in TOOLKIT_MOBILE_CLIENT_ID, default office-toolkit-mobile)
+and calls the API with the provider's access tokens. The API accepts such
+a token only when its issuer is exactly the configured TOOLKIT_OIDC_ISSUER,
+its audience contains TOOLKIT_OIDC_AUDIENCE (default office-toolkit-api,
+independent of the authorized party), the authorized party is the mobile
+client, it is unexpired, and its email is verified. At the provider, add
+an audience mapper putting the API audience into the mobile client's
+access tokens (Keycloak: oidc-audience-mapper, included client audience =
+the same value as TOOLKIT_OIDC_AUDIENCE).
+
 ## Run
 
     pip install -r requirements.txt

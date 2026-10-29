@@ -41,6 +41,11 @@ class FakeIdP:
         self.userinfo_sub = None  # None means "same as sub"
         self.email = "sso-user@example.com"
         self.email_verified = True
+        self.metadata_issuer_override = None
+        self.jwks_down = False
+        self.rotated = False
+        self.rotate_key = rsa.generate_private_key(public_exponent=65537,
+                                                   key_size=2048)
         self.token_calls = 0
         self._seen_nonce = None
         self._seen_verifier = None
@@ -64,16 +69,21 @@ class FakeIdP:
                 q = urllib.parse.parse_qs(u.query)
                 if u.path == "/.well-known/openid-configuration":
                     self._json({
-                        "issuer": idp.issuer,
+                        "issuer": idp.metadata_issuer_override or idp.issuer,
                         "authorization_endpoint": idp.issuer + "/authorize",
                         "token_endpoint": idp.issuer + "/token",
                         "jwks_uri": idp.issuer + "/jwks",
                         "userinfo_endpoint": idp.issuer + "/userinfo",
                     })
                 elif u.path == "/jwks":
-                    nums = idp.key.public_key().public_numbers()
+                    if idp.jwks_down:
+                        self._json({"error": "down"}, code=500)
+                        return
+                    key = idp.rotate_key if idp.rotated else idp.key
+                    kid = "test2" if idp.rotated else "test"
+                    nums = key.public_key().public_numbers()
                     self._json({"keys": [{
-                        "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test",
+                        "kty": "RSA", "use": "sig", "alg": "RS256", "kid": kid,
                         "n": _int_b64(nums.n), "e": _int_b64(nums.e)}]})
                 elif u.path == "/userinfo":
                     self._json({
@@ -365,14 +375,21 @@ def _mint_access_token(idp, **over):
     claims = {"iss": over.get("iss", idp.issuer),
               "sub": over.get("sub", idp.sub),
               "azp": over.get("azp", "office-toolkit-mobile"),
-              "aud": over.get("aud", "account"),
-              "iat": now, "exp": over.get("exp", now + 3600)}
+              "aud": over.get("aud", ["account", "office-toolkit-api"]),
+              "iat": now}
+    if over.get("exp", "default") != "omit":
+        claims["exp"] = over.get("exp", now + 3600)
     if over.get("email", True):
         claims["email"] = idp.email
-    header = {"alg": "RS256", "kid": "test", "typ": "JWT"}
+        ev = over.get("email_verified", True)
+        if ev != "omit":
+            claims["email_verified"] = ev
+    header = {"alg": "RS256", "kid": over.get("kid", "test"), "typ": "JWT"}
     si = (_b64url(json.dumps(header).encode()) + "."
           + _b64url(json.dumps(claims).encode())).encode()
-    key = idp.other_key if over.get("wrong_key") else idp.key
+    key = over.get("key")
+    if key is None:
+        key = idp.other_key if over.get("wrong_key") else idp.key
     sig = key.sign(si, padding.PKCS1v15(), hashes.SHA256())
     return si.decode() + "." + _b64url(sig)
 
@@ -431,3 +448,58 @@ class TestIdpBearerTokens:
     def test_garbage_token_rejected(self, oidc_app):
         client, _ = oidc_app
         assert self._call(client, "not-a-jwt").status_code == 401
+
+    def test_wrong_resource_same_client_rejected(self, oidc_app, idp):
+        # The registered mobile client, but a token minted for a different
+        # resource: client identity alone must not grant API access.
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, aud=["account"])).status_code == 401
+
+    def test_missing_exp_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, exp="omit")).status_code == 401
+
+    def test_unverified_email_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        idp.email_verified = False
+        assert self._call(client, _mint_access_token(
+            idp, email_verified=False)).status_code == 401
+
+    def test_discovery_issuer_mismatch_rejected(self, oidc_app, idp):
+        # Discovery claims an issuer the deployment never configured; a
+        # token from that issuer must fail even though it matches the
+        # fetched metadata.
+        client, _ = oidc_app
+        idp.metadata_issuer_override = "http://evil.example"
+        assert self._call(client, _mint_access_token(
+            idp, iss="http://evil.example")).status_code == 401
+
+    def test_subject_binding_blocks_email_takeover(self, oidc_app, idp):
+        # A different subject presenting an email already held by an SSO
+        # account must never authenticate as that account.
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, sub="alice-sub")).status_code == 400
+        assert self._call(client, _mint_access_token(
+            idp, sub="bob-sub")).status_code == 401
+        # the original subject still authenticates afterwards
+        assert self._call(client, _mint_access_token(
+            idp, sub="alice-sub")).status_code == 400
+
+    def test_jwks_rotation_triggers_refetch(self, oidc_app, idp):
+        import office_toolkit.web.app as webapp
+        client, _ = oidc_app
+        webapp._JWKS_CACHE.clear()
+        assert self._call(client, _mint_access_token(idp)).status_code == 400
+        idp.rotated = True  # provider now serves only the rotated key
+        assert self._call(client, _mint_access_token(
+            idp, kid="test2", key=idp.rotate_key)).status_code == 400
+
+    def test_jwks_fetch_failure_rejected(self, oidc_app, idp):
+        import office_toolkit.web.app as webapp
+        client, _ = oidc_app
+        webapp._JWKS_CACHE.clear()
+        idp.jwks_down = True
+        assert self._call(client, _mint_access_token(idp)).status_code == 401

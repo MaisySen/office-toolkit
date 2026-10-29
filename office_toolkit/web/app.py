@@ -203,41 +203,94 @@ def current_user_id():
 # PKCE directly against it). JWKS responses are cached per jwks_uri.
 _JWKS_CACHE: dict[str, tuple[dict, float]] = {}
 _JWKS_TTL = 300.0
+EXPECTED_AUDIENCE = os.environ.get("TOOLKIT_OIDC_AUDIENCE", "office-toolkit-api")
+
+
+def _jwks(jwks_uri: str):
+    """Return the cached JWKS for jwks_uri, fetching on miss or staleness.
+    A failed fetch raises; callers treat that as unverifiable."""
+    import requests as _requests
+    cached = _JWKS_CACHE.get(jwks_uri)
+    if cached is None or time.time() - cached[1] > _JWKS_TTL:
+        cached = (_requests.get(jwks_uri, timeout=5).json(), time.time())
+        _JWKS_CACHE[jwks_uri] = cached
+    return cached[0]
+
+
+def _decode_idp_token(token: str, jwks_uri: str):
+    """Decode a JWT against the provider JWKS. On any decode failure the
+    cache is busted and the JWKS refetched once, so a key rotation does
+    not reject fresh tokens; a second failure means unverifiable."""
+    from authlib.jose import JsonWebToken
+    jwt = JsonWebToken(["RS256"])
+    try:
+        return jwt.decode(token, _jwks(jwks_uri))
+    except Exception:
+        _JWKS_CACHE.pop(jwks_uri, None)
+        try:
+            return jwt.decode(token, _jwks(jwks_uri))
+        except Exception:
+            return None
+
+
+def _configured_issuer() -> str:
+    """The issuer this deployment trusts: the configured env value, or the
+    metadata URL the client was explicitly registered with (tests). Never
+    the issuer a fetched discovery document claims."""
+    configured = os.environ.get("TOOLKIT_OIDC_ISSUER", "").rstrip("/")
+    if configured:
+        return configured
+    meta_url = (getattr(oidc_client, "server_metadata_url", None)
+                or getattr(oidc_client, "_server_metadata_url", "") or "")
+    suffix = "/.well-known/openid-configuration"
+    if meta_url.endswith(suffix):
+        meta_url = meta_url[: -len(suffix)]
+    return meta_url.rstrip("/")
 
 
 def _idp_bearer_user_id(token: str) -> int | None:
-    """Validate a bearer JWT from the configured IdP: signature against the
-    provider JWKS, issuer and expiry, and the authorized party must be the
-    registered mobile client. Identity resolves via the token's email claim
-    or userinfo with a subject match, the same rule as the web callback.
-    Anything unverifiable means anonymous, never a guess."""
+    """Validate a bearer JWT from the configured IdP. Signature against
+    the provider JWKS; issuer pinned to the CONFIGURED issuer (not merely
+    to what discovery returns); expiry required; the API audience must be
+    in aud independently of the authorized party, and the authorized
+    party must be the registered mobile client; email is accepted only
+    when the IdP marks it verified. Identity resolves by issuer+subject,
+    never by email alone. Anything unverifiable means anonymous."""
     if oidc_client is None:
         return None
     import requests as _requests
-    from authlib.jose import JsonWebToken
     try:
         meta = oidc_client.load_server_metadata()
-        jwks_uri = meta["jwks_uri"]
-        cached = _JWKS_CACHE.get(jwks_uri)
-        if cached is None or time.time() - cached[1] > _JWKS_TTL:
-            cached = (_requests.get(jwks_uri, timeout=5).json(), time.time())
-            _JWKS_CACHE[jwks_uri] = cached
-        claims = JsonWebToken(["RS256"]).decode(token, cached[0])
+    except Exception:
+        return None
+    claims = _decode_idp_token(token, meta["jwks_uri"])
+    if claims is None:
+        return None
+    if claims.get("exp") is None:
+        return None
+    try:
         claims.validate()
     except Exception:
         return None
-    issuer = (meta.get("issuer") or "").rstrip("/")
-    if not issuer or claims.get("iss", "").rstrip("/") != issuer:
+    configured = _configured_issuer()
+    if not configured or claims.get("iss", "").rstrip("/") != configured:
         return None
     aud = claims.get("aud") or []
     if isinstance(aud, str):
         aud = [aud]
-    if claims.get("azp") != MOBILE_CLIENT_ID and MOBILE_CLIENT_ID not in aud:
+    if EXPECTED_AUDIENCE not in aud:
+        return None
+    if claims.get("azp") != MOBILE_CLIENT_ID:
         return None
     sub = claims.get("sub")
     if not sub:
         return None
-    email = (claims.get("email") or "").strip().lower()
+    email = ""
+    token_ev = claims.get("email_verified")
+    if token_ev is False:
+        return None
+    if token_ev is True and claims.get("email"):
+        email = (claims["email"] or "").strip().lower()
     if not email:
         try:
             ui = _requests.get(meta["userinfo_endpoint"], timeout=5,
@@ -246,11 +299,13 @@ def _idp_bearer_user_id(token: str) -> int | None:
             return None
         if str(ui.get("sub", "")) != str(sub):
             return None
+        if ui.get("email_verified") is not True:
+            return None
         email = (ui.get("email") or "").strip().lower()
     if not email or "@" not in email:
         return None
     try:
-        return auth_store.find_or_create_oidc_user(email, issuer, str(sub))
+        return auth_store.find_or_create_oidc_user(email, configured, str(sub))
     except ToolkitError:
         return None
 

@@ -70,6 +70,29 @@ def setup_realm(auth):
                           headers=auth, json=body)
         if r.status_code not in (201, 409):
             fail(f"client {cid}: {r.status_code} {r.text[:200]}")
+    # The backend requires its API audience in bearer tokens, independent
+    # of the authorized party; map it onto the mobile client's tokens.
+    cid = requests.get(f"{KC}/admin/realms/{REALM}/clients", headers=auth,
+                       params={"clientId": "office-toolkit-mobile"}
+                       ).json()[0]["id"]
+    r = requests.post(
+        f"{KC}/admin/realms/{REALM}/clients/{cid}/protocol-mappers/models",
+        headers=auth, json={
+            "name": "office-toolkit-api-audience", "protocol": "openid-connect",
+            "protocolMapper": "oidc-audience-mapper",
+            "config": {"included.client.audience": "office-toolkit-api",
+                       "id.token.claim": "false", "access.token.claim": "true"}})
+    if r.status_code not in (201, 409):
+        fail(f"audience mapper: {r.status_code} {r.text[:200]}")
+    # The journeys assume the stock registration flow and realm flags; a
+    # silent misconfiguration would invalidate their evidence.
+    realm = requests.get(f"{KC}/admin/realms/{REALM}", headers=auth).json()
+    for flag in ("enabled", "registrationAllowed", "verifyEmail"):
+        if not realm.get(flag):
+            fail(f"realm misconfigured: {flag} is not enabled")
+    if realm.get("registrationFlow", "registration") != "registration":
+        fail(f"realm registration flow is {realm.get('registrationFlow')!r},"
+             " expected the default 'registration'")
     print("realm + clients ready")
 
 
@@ -245,6 +268,16 @@ def self_registration_journey(auth, ctx):
     page.locator('input[type="submit"], button[type="submit"]').first.click()
     page.wait_for_load_state("load")
 
+    # Before verification and password setup complete, the account must
+    # not authenticate by any path.
+    early = requests.post(
+        f"{KC}/realms/{REALM}/protocol/openid-connect/token",
+        data={"grant_type": "password", "client_id": "office-toolkit-mobile",
+              "username": SELF_EMAIL, "password": SELF_PASSWORD})
+    if early.status_code == 200:
+        fail("self-registered user authenticated before completing "
+             "verification and password setup")
+
     # Required-action chain: verify-email notice/interstitial,
     # update-password form, login form or completion can appear in any
     # order; handle each by what the page actually shows.
@@ -288,6 +321,13 @@ def self_registration_journey(auth, ctx):
         fail("post-registration flow did not settle within 8 steps")
     if not user_state(auth, SELF_EMAIL).get("emailVerified"):
         fail("self-registered email not marked verified")
+    late = requests.post(
+        f"{KC}/realms/{REALM}/protocol/openid-connect/token",
+        data={"grant_type": "password", "client_id": "office-toolkit-mobile",
+              "username": SELF_EMAIL, "password": SELF_PASSWORD})
+    if late.status_code != 200 or "access_token" not in late.json():
+        fail(f"self-registered user cannot authenticate after setup: "
+             f"{late.status_code}")
     login_via_toolkit(page, SELF_EMAIL, SELF_PASSWORD)
     print("self-registration journey OK")
 
@@ -348,7 +388,14 @@ def mobile_pkce_journey(ctx):
                             "code_verifier": verifier})
     if r.status_code != 200 or "access_token" not in r.json():
         fail(f"mobile token exchange: {r.status_code} {r.text[:200]}")
-    print("mobile PKCE journey OK")
+    payload = json.loads(base64.urlsafe_b64decode(
+        r.json()["access_token"].split(".")[1] + "=="))
+    aud = payload.get("aud") or []
+    if isinstance(aud, str):
+        aud = [aud]
+    if "office-toolkit-api" not in aud:
+        fail(f"mobile access token lacks the API audience: {aud}")
+    print("mobile PKCE journey OK (token carries office-toolkit-api audience)")
 
 
 def main():
