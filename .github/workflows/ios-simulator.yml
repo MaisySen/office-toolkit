@@ -1,0 +1,32 @@
+name: ios-simulator
+on: [push]
+jobs:
+  simulator-build:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install JS dependencies
+        run: npm ci
+      - name: Generate the native iOS project
+        run: npx expo prebuild --platform ios --non-interactive --no-install --clean
+        env:
+          CI: 1
+      - name: Install pods
+        run: npx pod-install ios --non-interactive
+        env:
+          CI: 1
+      - name: Build for the simulator without signing
+        working-directory: mobile/ios
+        run: |
+          xcodebuild -workspace OfficeToolkit.xcworkspace \
+            -scheme OfficeToolkit -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
