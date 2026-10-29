@@ -51,7 +51,10 @@ jobs:
           done
           curl -sf --max-time 5 http://localhost:8080/realms/master >/dev/null \
             || { tail -40 /tmp/kc.log; exit 1; }
-          python3 scripts/ci_runtime_stack.py || { tail -60 /tmp/kc.log; exit 1; }
+          # The simulator can blackhole localhost over IPv6 (KC binds
+          # 127.0.0.1 only), so every app-facing URL is the numeric IP,
+          # and the minted iss must match it end to end.
+          KC_BASE=http://localhost:8080           PUBLIC_ISSUER=http://127.0.0.1:8080/realms/office-toolkit             python3 scripts/ci_runtime_stack.py || { tail -60 /tmp/kc.log; exit 1; }
       - name: Install JS dependencies
         working-directory: mobile
         run: npm ci
@@ -60,6 +63,10 @@ jobs:
         working-directory: mobile
         env:
           CI: 1
+          # expo-constants re-evaluates app.config.js during xcodebuild,
+          # so the endpoints must be set here, not only at prebuild.
+          TOOLKIT_OIDC_ISSUER: http://127.0.0.1:8080/realms/office-toolkit
+          TOOLKIT_API_BASE_URL: http://127.0.0.1:5000
         run: |
           npx expo prebuild --platform ios --non-interactive --no-install --clean
           npx pod-install ios --non-interactive
@@ -95,6 +102,10 @@ jobs:
         working-directory: mobile
         env:
           CI: 1
+          # In a dev build Constants.expoConfig comes from the manifest
+          # Metro serves, evaluated with THIS shell's env.
+          TOOLKIT_OIDC_ISSUER: http://127.0.0.1:8080/realms/office-toolkit
+          TOOLKIT_API_BASE_URL: http://127.0.0.1:5000
         run: |
           # react-native 0.76's cli.js is a deprecation shim without the
           # start command; the Expo CLI owns Metro in this project.

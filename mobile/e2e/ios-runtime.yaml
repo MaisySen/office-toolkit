@@ -30,6 +30,13 @@ appId: au.fintex.officetoolkit
 - tapOn: "Password"
 - inputText: "runtime-pass-123"
 - hideKeyboard
+# The realm header pushes the button below the fold on small screens;
+# text lookup fails until it is scrolled into view.
+- scrollUntilVisible:
+    element:
+      text: "Sign In"
+    direction: DOWN
+    timeout: 30000
 - tapOn: "Sign In"
 # Back in the app, the authenticated operation list comes from the live
 # API over the bearer token the session just minted.
