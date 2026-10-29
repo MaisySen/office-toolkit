@@ -120,7 +120,12 @@ def browser_action_link(page, link, username, password, new_password=None):
             page.wait_for_load_state("load")
             continue
         if page.locator('input[name="password-confirm"]').count() and new_password:
-            page.fill('input[name="password"]', new_password)
+            # KC's update-password form names the new-password field
+            # "password-new"; the registration form uses "password".
+            new_sel = ('input[name="password-new"]'
+                       if page.locator('input[name="password-new"]').count()
+                       else 'input[name="password"]')
+            page.fill(new_sel, new_password)
             page.fill('input[name="password-confirm"]', new_password)
             page.locator('input[type="submit"], button[type="submit"]').first.click()
             page.wait_for_load_state("load")
