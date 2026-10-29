@@ -1,0 +1,79 @@
+name: android-release
+on:
+  workflow_dispatch:
+    inputs:
+      build_label:
+        description: "Fresh label for this dispatch (runbook: identical dispatches can be skipped)"
+        required: true
+jobs:
+  aab:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install JS dependencies
+        run: npm ci
+      - name: Generate the native Android project
+        run: npx expo prebuild --platform android --non-interactive --no-install --clean
+        env:
+          CI: 1
+          TOOLKIT_OIDC_ISSUER: https://doctool.multies.si/auth/realms/office-toolkit
+          TOOLKIT_API_BASE_URL: https://doctool.multies.si
+      - name: Align Kotlin with the version React Native actually applies
+        working-directory: mobile/android
+        run: echo "android.kotlinVersion=1.9.24" >> gradle.properties
+      - name: Decode the upload keystore
+        working-directory: mobile/android
+        run: echo "$TOOLKIT_UPLOAD_KEYSTORE_BASE64" | base64 -d > upload.keystore
+        env:
+          TOOLKIT_UPLOAD_KEYSTORE_BASE64: ${{ secrets.OFFICE_TOOLKIT_UPLOAD_KEYSTORE_BASE64 }}
+      - name: Apply the upload signing config
+        working-directory: mobile/android
+        run: python3 ../../scripts/android_upload_signing.py
+      - name: Build the signed release AAB
+        working-directory: mobile/android
+        run: ./gradlew bundleRelease --no-daemon
+        env:
+          TOOLKIT_UPLOAD_STORE_FILE: upload.keystore
+          TOOLKIT_UPLOAD_STORE_PASSWORD: ${{ secrets.OFFICE_TOOLKIT_UPLOAD_STORE_PASSWORD }}
+          TOOLKIT_UPLOAD_KEY_ALIAS: upload
+          TOOLKIT_UPLOAD_KEY_PASSWORD: ${{ secrets.OFFICE_TOOLKIT_UPLOAD_KEY_PASSWORD }}
+      - name: Verify the AAB is signed with the upload key
+        working-directory: mobile/android
+        run: |
+          AAB=app/build/outputs/bundle/release/app-release.aab
+          jarsigner -verify -verbose -certs "$AAB" | grep -m1 "CN=Bidur Khatri"
+      # This repo is public and so are its Actions artifacts, and no
+      # public binary distribution is approved. The AAB therefore never
+      # leaves the runner in the clear: it is encrypted to the CI
+      # recipient key in ci/aab-ci-recipient.asc (private key held off
+      # repo by the Android Tab) and only the ciphertext is uploaded.
+      - name: Encrypt the AAB to the pinned CI recipient key
+        run: |
+          TAG="android-${{ github.event.inputs.build_label }}"
+          EXPECTED="31AE63FB256FAF40BB40265969426C3AD28C99A2"
+          gpg --batch --import ci/aab-ci-recipient.asc
+          FPR=$(gpg --batch --with-colons --list-keys "$EXPECTED" | awk -F: '/^fpr/{print $10; exit}')
+          # Fail closed: if the committed public key is not exactly the
+          # pinned recipient, stop before anything is uploaded.
+          [ "$FPR" = "$EXPECTED" ]
+          gpg --batch --yes --trust-model always --recipient "$EXPECTED" --encrypt --output "/tmp/office-toolkit-$TAG.aab.gpg" mobile/android/app/build/outputs/bundle/release/app-release.aab
+          # Fail closed: no ciphertext, no upload.
+          test -s "/tmp/office-toolkit-$TAG.aab.gpg"
+      - name: Upload the encrypted AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: office-toolkit-release-aab-encrypted
+          path: /tmp/office-toolkit-android-*.aab.gpg
+          if-no-files-found: error
