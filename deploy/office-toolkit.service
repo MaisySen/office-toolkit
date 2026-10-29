@@ -1,0 +1,15 @@
+[Unit]
+Description=Office Toolkit web app
+After=network.target keycloak.service
+
+[Service]
+Type=simple
+User=toolkit
+Group=toolkit
+WorkingDirectory=/opt/office-toolkit
+EnvironmentFile=/etc/office-toolkit/toolkit.env
+ExecStart=/opt/office-toolkit/venv/bin/gunicorn --bind 127.0.0.1:5000 --workers 2 'office_toolkit.web.app:app'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

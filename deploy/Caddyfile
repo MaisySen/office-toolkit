@@ -1,0 +1,12 @@
+# doctool.multies.si edge: the toolkit app plus Keycloak under /auth.
+# Keycloak must start with KC_HTTP_RELATIVE_PATH=/auth and
+# KC_HOSTNAME=https://doctool.multies.si/auth so its issuer, discovery
+# document and redirects all resolve through this public base.
+doctool.multies.si {
+	handle_path /auth/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		reverse_proxy 127.0.0.1:5000
+	}
+}

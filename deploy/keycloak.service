@@ -1,0 +1,15 @@
+[Unit]
+Description=Keycloak for Office Toolkit
+After=network.target
+
+[Service]
+Type=simple
+User=keycloak
+Group=keycloak
+EnvironmentFile=/etc/office-toolkit/keycloak.env
+ExecStart=/opt/keycloak/bin/kc.sh start --optimized
+Restart=on-failure
+LimitNOFILE=102642
+
+[Install]
+WantedBy=multi-user.target
