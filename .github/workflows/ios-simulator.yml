@@ -1,5 +1,12 @@
 name: ios-simulator
-on: [push]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+on:
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
 jobs:
   simulator-build:
     runs-on: macos-latest

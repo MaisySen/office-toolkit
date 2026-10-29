@@ -1,5 +1,12 @@
 name: android-apk
-on: [push]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+on:
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
 jobs:
   apk:
     runs-on: ubuntu-latest
