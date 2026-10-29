@@ -152,6 +152,27 @@ jobs:
           PUBLIC_ISSUER=http://10.0.2.2:8080/realms/office-toolkit \
             python3 scripts/ci_runtime_stack.py \
             || { tail -60 /tmp/kc.log; exit 1; }
+      - name: Start Metro and warm the android bundle
+        timeout-minutes: 8
+        working-directory: mobile
+        env:
+          CI: 1
+        run: |
+          nohup npx react-native start --host 0.0.0.0 --port 8081 \
+            > /tmp/metro.log 2>&1 &
+          for i in $(seq 1 45); do
+            curl -sf --max-time 5 http://127.0.0.1:8081/status \
+              | grep -q 'packager-status:running' && break
+            sleep 2
+          done
+          curl -sf --max-time 5 http://127.0.0.1:8081/status \
+            | grep -q 'packager-status:running' \
+            || { tail -40 /tmp/metro.log; exit 1; }
+          # Bundle once here so the app launch does not pay the full
+          # bundling cost on the UI thread while Maestro watches.
+          curl -sf --max-time 300 \
+            'http://127.0.0.1:8081/.expo/.virtual-metro-entry.bundle?platform=android&dev=true&minify=false' \
+            -o /dev/null || { tail -40 /tmp/metro.log; exit 1; }
       - name: Boot the emulator and install the APK
         timeout-minutes: 15
         run: |
