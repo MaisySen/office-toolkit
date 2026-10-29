@@ -251,27 +251,38 @@ jobs:
           "$ANDROID_HOME/platform-tools/adb" push /tmp/runtime-sample.pdf /sdcard/Download/runtime-sample.pdf
           maestro test mobile/e2e/android-runtime.yaml
       - name: Inspect the operation output file
-        # The app writes the server result into its files directory;
-        # pull it and verify it is a real, decodable JPEG.
+        # The app writes the server result into its files directory.
+        # PDF to JPEG returns a ZIP of JPEG pages (pages-jpeg.zip);
+        # pull it and verify every contained page decodes as a real
+        # JPEG. A bare JPEG output is accepted too.
         if: success()
         run: |
           "$ANDROID_HOME/platform-tools/adb" root || true
           "$ANDROID_HOME/platform-tools/adb" wait-for-device
-          OUT=$("$ANDROID_HOME/platform-tools/adb" shell             'ls -t /data/data/au.fintex.officetoolkit/files/ | grep runtime-sample | head -1'             | tr -d '\r')
+          OUT=$("$ANDROID_HOME/platform-tools/adb" shell 'ls -t /data/data/au.fintex.officetoolkit/files/ | grep -E "^pages-jpeg.*[.]zip$" | head -1' | tr -d '\r')
           test -n "$OUT" || {
-            echo 'no runtime-sample output found; files dir holds:'
+            echo 'no pages-jpeg output found; files dir holds:'
             "$ANDROID_HOME/platform-tools/adb" shell 'ls /data/data/au.fintex.officetoolkit/files/'
             exit 1
           }
-          "$ANDROID_HOME/platform-tools/adb" pull             "/data/data/au.fintex.officetoolkit/files/$OUT" /tmp/op-output
+          "$ANDROID_HOME/platform-tools/adb" pull "/data/data/au.fintex.officetoolkit/files/$OUT" /tmp/op-output
           python3 - <<'PYEOF'
-          import io
+          import io, zipfile
           from PIL import Image
           data = open('/tmp/op-output', 'rb').read()
-          assert data[:2] == b'\xff\xd8', f'not a JPEG: {data[:16]!r}'
-          im = Image.open(io.BytesIO(data))
-          im.verify()
-          print(f'output OK: {len(data)} bytes, decodable JPEG')
+          if data[:4] == b'PK\x03\x04':
+              z = zipfile.ZipFile(io.BytesIO(data))
+              pages = [n for n in z.namelist() if n.lower().endswith(('.jpg', '.jpeg'))]
+              assert pages, f'no JPEG pages in zip: {z.namelist()}'
+              for n in pages:
+                  d = z.read(n)
+                  assert d[:2] == b'\xff\xd8', f'{n} is not a JPEG'
+                  Image.open(io.BytesIO(d)).verify()
+              print(f'output OK: zip with {len(pages)} decodable JPEG page(s), {len(data)} bytes')
+          else:
+              assert data[:2] == b'\xff\xd8', f'not a JPEG or ZIP: {data[:16]!r}'
+              Image.open(io.BytesIO(data)).verify()
+              print(f'output OK: {len(data)} bytes, decodable JPEG')
           PYEOF
       - name: Surface runtime evidence in the job log
         # The artifact download redirect resists in-page reads, so the

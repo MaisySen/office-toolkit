@@ -68,10 +68,17 @@ appId: au.fintex.officetoolkit
     timeout: 15000
 - takeScreenshot: picker-downloads
 - tapOn: "runtime-sample.pdf"
-# The app runs the operation server-side, writes the JPEG, shows its
-# own result line and offers the system share sheet. The chooser has
-# no stable title text on new Android, so wait on the result line.
+# The app runs the operation server-side, writes the result ZIP, sets
+# its result line and then opens the system share sheet over the app.
+# Maestro reads the top window, so the Done line stays invisible while
+# the chooser is up: wait for the sheet, dismiss it, then read the
+# app's own result line.
+- extendedWaitUntil:
+    visible: "Sharing"
+    timeout: 120000
+- takeScreenshot: share-sheet
+- back
 - extendedWaitUntil:
     visible: "Done:"
-    timeout: 120000
+    timeout: 30000
 - takeScreenshot: operation-result
