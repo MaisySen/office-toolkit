@@ -297,6 +297,13 @@ jobs:
         if: always()
         run: |
           if [ "${{ steps.flow.outcome }}" != "success" ]; then
+            echo '--- accessibility hierarchy text nodes ---'
+            # The result line renders in pixels but Maestro never
+            # matched it; dump the same hierarchy Maestro reads to
+            # see whether the node is present at all.
+            "$ANDROID_HOME/platform-tools/adb" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || true
+            "$ANDROID_HOME/platform-tools/adb" pull /sdcard/ui.xml /tmp/ui.xml >/dev/null 2>&1 || true
+            grep -o 'text="[^"]*"' /tmp/ui.xml 2>/dev/null | head -40 || true
             echo '--- logcat (ReactNativeJS and crashes) ---'
             "$ANDROID_HOME/platform-tools/adb" logcat -d -t 6000 2>/dev/null | grep -iE "ReactNativeJS|AndroidRuntime|FATAL EXCEPTION" | tail -50 || true
             echo '--- app files and picker cache ---'
