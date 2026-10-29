@@ -1,15 +1,11 @@
-# The owner approved the standard Android SDK License Agreement as
-# served by the SDK installer (repository metadata text, sha1
-# a90c249c9e874a0ca1854dd16aa9827dec1430da) on 2026-10-29, scoped to the
-# five stable-channel components below for CI test setup only - no
-# preview, legacy or other licenses. Permission is still enforced BEFORE
-# any acceptance: scripts/ci_android_license.py validates Google's live
-# repository metadata (all five components stable-channel, carrying only
-# android-sdk-license) and requires the license text hash to equal the
-# approved pin; any drift refuses the job before sdkmanager runs. The
-# install seeds only the approved license file and runs with stdin
-# closed, so an unexpected prompt fails the job instead of ever being
-# accepted. The blanket `--licenses` command is never invoked.
+# SDK license gate. scripts/ci_android_license.py validates Google's
+# live repository metadata BEFORE any acceptance: all five components
+# below must be stable-channel and carry only android-sdk-license, and
+# the license text hash must equal the pin recorded in the script. Any
+# drift refuses the job before sdkmanager runs. The install seeds only
+# that license file and runs with stdin closed, so an unexpected prompt
+# fails the job instead of ever being accepted. The blanket
+# `--licenses` command is never invoked.
 name: android-runtime
 on: [push, workflow_dispatch]
 jobs:

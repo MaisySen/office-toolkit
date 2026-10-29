@@ -9,12 +9,10 @@ SDK repository metadata and:
   3. hashes the license text (trim + collapse whitespace, sha1; this
      normalization is a candidate match for sdkmanager's own hashing and
      is NOT yet proven identical - the install step fails closed if it
-     differs) and requires it to equal the approved pinned hash below.
-     The owner approved the sdkmanager-served metadata text on
-     2026-10-29, scoped to five stable components for CI test setup;
-     that text differs in a few sections from the live
-     https://developer.android.com/studio/terms page, and the approval
-     covers the metadata text, not the page.
+     differs) and requires it to equal the pinned hash below. The pin
+     covers the sdkmanager-served metadata text, which differs in a
+     few sections from the live
+     https://developer.android.com/studio/terms page.
 
 Any mismatch exits non-zero BEFORE sdkmanager is invoked, so no changed
 or unexpected terms can ever be accepted. The workflow then seeds only
@@ -33,10 +31,10 @@ SOURCES = [
     "https://dl.google.com/android/repository/repository2-3.xml",
     "https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-1.xml",
 ]
-# Approved by the owner on 2026-10-29, scoped to the sdkmanager-served
-# text below and the five stable components in android-runtime.yml for
-# CI test setup only. Preview, legacy and any other licenses remain
-# unapproved and are refused by this gate.
+# Pinned hash of the approved license text: the sdkmanager-served
+# metadata copy of android-sdk-license. Scope: the five stable
+# components in android-runtime.yml, CI test setup only. Preview,
+# legacy and any other licenses are refused by this gate.
 PINNED_SHA1 = "a90c249c9e874a0ca1854dd16aa9827dec1430da"
 APPROVED_LICENSE_ID = "android-sdk-license"
 
@@ -66,7 +64,7 @@ def main():
         normalize(license_texts[APPROVED_LICENSE_ID]).encode()).hexdigest()
     if digest != PINNED_SHA1:
         fail(f"license text changed: metadata hashes to {digest}, "
-             f"pin is {PINNED_SHA1}. Owner re-approval required before use.")
+             f"pin is {PINNED_SHA1}. Re-approval required before use.")
 
     for comp in components:
         blocks = []
