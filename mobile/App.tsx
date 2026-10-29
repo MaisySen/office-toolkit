@@ -23,6 +23,7 @@ export default function App() {
   const [active, setActive] = useState<Operation | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [outPath, setOutPath] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const redirectUri = AuthSession.makeRedirectUri({ scheme: "officetoolkit", path: "auth" });
   const { ready, signIn } = useSignIn({ issuer, clientId, redirectUri });
@@ -51,6 +52,7 @@ export default function App() {
     if (!active) return;
     setError(null);
     setResult(null);
+    setOutPath(null);
     const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true });
     if (picked.canceled) return;
     const asset = picked.assets[0];
@@ -79,9 +81,7 @@ export default function App() {
         encoding: FileSystem.EncodingType.Base64,
       });
       setResult(`Done: ${filename}`);
-      if (await Sharing.isAvailableAsync()) {
-        Sharing.shareAsync(out).catch(() => {});
-      }
+      setOutPath(out);
     } catch (e) {
       if (e instanceof AuthError) await onAuthExpired();
       else setError(e instanceof Error ? e.message : String(e));
@@ -135,6 +135,19 @@ export default function App() {
           <Text style={styles.note}>{active.label}</Text>
           {busy && <ActivityIndicator style={{ marginBottom: 16 }} />}
           {result && <Text style={styles.resultText}>{result}</Text>}
+          {outPath && (
+            <TouchableOpacity
+              style={styles.button}
+              onPress={() => {
+                Sharing.isAvailableAsync().then((ok) => {
+                  if (ok) Sharing.shareAsync(outPath).catch(() => {});
+                  else setError("Sharing is not available on this device.");
+                });
+              }}
+            >
+              <Text style={styles.buttonText}>Share</Text>
+            </TouchableOpacity>
+          )}
           {error && <Text style={styles.error}>{error}</Text>}
           <TouchableOpacity style={styles.button} disabled={busy} onPress={runActive}>
             <Text style={styles.buttonText}>Choose file and run</Text>
