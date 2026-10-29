@@ -52,7 +52,9 @@ jobs:
         working-directory: mobile/android
         run: ./gradlew bundleRelease --no-daemon
         env:
-          TOOLKIT_UPLOAD_STORE_FILE: upload.keystore
+          # Absolute: file() in app/build.gradle resolves relative to
+          # android/app, not to android/ where the keystore was decoded.
+          TOOLKIT_UPLOAD_STORE_FILE: ${{ github.workspace }}/mobile/android/upload.keystore
           TOOLKIT_UPLOAD_STORE_PASSWORD: ${{ secrets.OFFICE_TOOLKIT_UPLOAD_STORE_PASSWORD }}
           TOOLKIT_UPLOAD_KEY_ALIAS: upload
           TOOLKIT_UPLOAD_KEY_PASSWORD: ${{ secrets.OFFICE_TOOLKIT_UPLOAD_KEY_PASSWORD }}
@@ -67,6 +69,9 @@ jobs:
       # recipient key in ci/aab-ci-recipient.asc (private key held off
       # repo by the Android Tab) and only the ciphertext is uploaded.
       - name: Encrypt the AAB to the pinned CI recipient key
+        # Repo root: ci/ and the mobile/android output path are relative
+        # to it, not to the job's default mobile directory.
+        working-directory: ${{ github.workspace }}
         run: |
           TAG="android-${{ github.event.inputs.build_label }}"
           EXPECTED="31AE63FB256FAF40BB40265969426C3AD28C99A2"
