@@ -1,0 +1,78 @@
+# Standard self-hosted deployment: toolkit + Keycloak (identity) + Postgres
+# (Keycloak's store) + Caddy (TLS termination). See docs/deployment.md.
+services:
+  toolkit:
+    build: .
+    environment:
+      TOOLKIT_SECRET_KEY: ${TOOLKIT_SECRET_KEY:?set in .env}
+      TOOLKIT_OIDC_ISSUER: ${PUBLIC_URL}/realms/office-toolkit
+      # Inside the network the IdP is keycloak:8080; the public issuer URL
+      # must still be the public one or token issuer checks fail. The
+      # toolkit reaches the IdP through Caddy on the public hostname.
+      TOOLKIT_OIDC_CLIENT_ID: office-toolkit-web
+      TOOLKIT_OIDC_CLIENT_SECRET: ${TOOLKIT_OIDC_CLIENT_SECRET:?set in .env}
+    volumes:
+      - toolkit-data:/data
+    restart: unless-stopped
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KC_DB_PASSWORD:?set in .env}
+      POSTGRES_DB: keycloak
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8
+    command: start --hostname ${PUBLIC_URL} --http-enabled true --hostname-strict false --proxy-headers forwarded
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KC_DB_PASSWORD:?set in .env}
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN:?set in .env}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:?set in .env}
+      # SMTP so verification and reset emails actually send (Bidur: "emails,
+      # proper and standard"). Values come from .env; see docs/deployment.md.
+      KC_SMTP_HOST: ${KC_SMTP_HOST:?set in .env}
+      KC_SMTP_PORT: ${KC_SMTP_PORT:-587}
+      # Sending identity is not yet owner-grounded; placeholder only.
+      KC_SMTP_FROM: ${KC_SMTP_FROM:-accounts@example.com}
+      KC_SMTP_USER: ${KC_SMTP_USER:?set in .env}
+      KC_SMTP_PASSWORD: ${KC_SMTP_PASSWORD:?set in .env}
+      KC_SMTP_STARTTLS: "true"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && head -c 100 <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    restart: unless-stopped
+
+volumes:
+  toolkit-data:
+  pg-data:
+  caddy-data:

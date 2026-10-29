@@ -1,0 +1,12 @@
+{$PUBLIC_HOSTNAME} {
+    # IdP paths go to Keycloak, everything else to the toolkit.
+    handle /realms/* {
+        reverse_proxy keycloak:8080
+    }
+    handle /resources/* {
+        reverse_proxy keycloak:8080
+    }
+    handle {
+        reverse_proxy toolkit:8000
+    }
+}
