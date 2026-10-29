@@ -129,6 +129,11 @@ jobs:
           echo "$MAESTRO_DIR/bin" >> "$GITHUB_PATH"
       - name: Drive sign-in and the operation screen
         timeout-minutes: 15
+        env:
+          # The XCUITest driver can take minutes to install and start on
+          # a cold CI simulator; Maestro's default startup timeout is
+          # too tight and fails before the app is ever launched.
+          MAESTRO_DRIVER_STARTUP_TIMEOUT: '300000'
         run: maestro test mobile/e2e/ios-runtime.yaml
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
