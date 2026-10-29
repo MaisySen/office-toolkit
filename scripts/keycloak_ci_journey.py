@@ -118,13 +118,24 @@ def complete_action_link(link, password, new_password=None):
     for step in range(6):
         action = form_action(r.text)
         if action is None:
-            m = re.search(r'href="([^"]*login-actions[^"]*)"', r.text)
-            if m:
-                u = urllib.parse.urljoin(KC, m.group(1).replace("&amp;", "&"))
-                r = s.get(u)
+            anchors = re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+                                 r.text, re.S)
+            summary = []
+            proceed = None
+            for href, label in anchors:
+                sp = urllib.parse.urlsplit(href.replace("&amp;", "&"))
+                names = sorted(k for k, _ in urllib.parse.parse_qsl(sp.query))
+                summary.append({"text": clean_text(label, 40),
+                                "path": sp.path, "params": names})
+                if "proceed" in clean_text(label, 60).lower():
+                    proceed = urllib.parse.urljoin(KC, sp.geturl())
+            print(f"step {step}: no form; anchors:", json.dumps(summary))
+            if proceed and proceed != r.url:
+                r = s.get(proceed)
                 print(f"step {step} proceed ->", page_state(r))
                 continue
-            print(f"step {step}: no form, no proceed link")
+            if proceed:
+                print(f"step {step}: proceed link loops to the same URL")
             break
         if 'name="username"' in r.text:
             r = s.post(action, data={"username": EMAIL, "password": password})
@@ -178,15 +189,6 @@ def registration_journey(auth):
         fail(f"user create: {r.status_code} {r.text[:200]}")
     uid = requests.get(f"{KC}/admin/realms/{REALM}/users",
                        headers=auth, params={"email": EMAIL}).json()[0]["id"]
-    dg = requests.post(f"{KC}/realms/{REALM}/protocol/openid-connect/token",
-                       data={"grant_type": "password",
-                             "client_id": "office-toolkit-mobile",
-                             "username": EMAIL, "password": PASSWORD})
-    dg_err = ((dg.json().get("error", "token-ok") + " / "
-               + dg.json().get("error_description", ""))
-              if dg.headers.get("content-type", "").startswith("application/json")
-              else dg.text[:120])
-    print("direct-grant credential check:", dg.status_code, dg_err)
     r = requests.put(f"{KC}/admin/realms/{REALM}/users/{uid}/execute-actions-email",
                      headers=auth, json=["VERIFY_EMAIL"])
     if r.status_code not in (200, 204):
@@ -205,6 +207,15 @@ def registration_journey(auth):
     if not status.get("emailVerified"):
         fail("email not marked verified after completing the link")
     print("verify-email journey OK")
+    dg = requests.post(f"{KC}/realms/{REALM}/protocol/openid-connect/token",
+                       data={"grant_type": "password",
+                             "client_id": "office-toolkit-mobile",
+                             "username": EMAIL, "password": PASSWORD})
+    dg_err = ((dg.json().get("error", "token-ok") + " / "
+               + dg.json().get("error_description", ""))
+              if dg.headers.get("content-type", "").startswith("application/json")
+              else dg.text[:120])
+    print("direct-grant check after verification:", dg.status_code, dg_err)
     s = requests.Session()
     login_via_toolkit(s, PASSWORD)
 
