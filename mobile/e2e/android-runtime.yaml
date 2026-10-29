@@ -51,3 +51,30 @@ appId: au.fintex.officetoolkit
 - tapOn: "PDF to JPEG"
 - assertVisible: "Choose file and run"
 - takeScreenshot: operation-ready
+- tapOn: "Choose file and run"
+# The system picker opens on Recent, but adb-pushed files are not in
+# MediaStore; go through the Downloads root instead.
+- extendedWaitUntil:
+    visible: "Show roots"
+    timeout: 30000
+- takeScreenshot: picker-open
+- tapOn: "Show roots"
+- extendedWaitUntil:
+    visible: "Downloads"
+    timeout: 15000
+- tapOn: "Downloads"
+- extendedWaitUntil:
+    visible: "runtime-sample.pdf"
+    timeout: 15000
+- takeScreenshot: picker-downloads
+- tapOn: "runtime-sample.pdf"
+# The app runs the operation server-side, writes the JPEG and opens
+# the system share sheet; dismiss it to reveal the result line.
+- extendedWaitUntil:
+    visible: "Share"
+    timeout: 120000
+- back
+- extendedWaitUntil:
+    visible: "Done:"
+    timeout: 30000
+- takeScreenshot: operation-result

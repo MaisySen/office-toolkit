@@ -243,7 +243,35 @@ jobs:
         timeout-minutes: 15
         run: |
           "$ANDROID_HOME/platform-tools/adb" install -r /tmp/apk/app-debug.apk
+          # Seed the input the flow picks through the system document
+          # picker. adb push skips MediaStore, so the flow navigates to
+          # the Downloads root instead of relying on Recent.
+          python3 -c "from reportlab.pdfgen import canvas; c = canvas.Canvas('/tmp/runtime-sample.pdf'); c.drawString(72, 720, 'runtime proof page'); c.save()"
+          "$ANDROID_HOME/platform-tools/adb" push /tmp/runtime-sample.pdf /sdcard/Download/runtime-sample.pdf
           maestro test mobile/e2e/android-runtime.yaml
+      - name: Inspect the operation output file
+        # The app writes the server result into its files directory;
+        # pull it and verify it is a real, decodable JPEG.
+        if: success()
+        run: |
+          "$ANDROID_HOME/platform-tools/adb" root || true
+          "$ANDROID_HOME/platform-tools/adb" wait-for-device
+          OUT=$("$ANDROID_HOME/platform-tools/adb" shell             'ls -t /data/data/au.fintex.officetoolkit/files/ | grep runtime-sample | head -1'             | tr -d '\r')
+          test -n "$OUT" || {
+            echo 'no runtime-sample output found; files dir holds:'
+            "$ANDROID_HOME/platform-tools/adb" shell 'ls /data/data/au.fintex.officetoolkit/files/'
+            exit 1
+          }
+          "$ANDROID_HOME/platform-tools/adb" pull             "/data/data/au.fintex.officetoolkit/files/$OUT" /tmp/op-output
+          python3 - <<'PYEOF'
+          import io
+          from PIL import Image
+          data = open('/tmp/op-output', 'rb').read()
+          assert data[:2] == b'\xff\xd8', f'not a JPEG: {data[:16]!r}'
+          im = Image.open(io.BytesIO(data))
+          im.verify()
+          print(f'output OK: {len(data)} bytes, decodable JPEG')
+          PYEOF
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
         if: always()
