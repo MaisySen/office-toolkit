@@ -4,9 +4,15 @@ concurrency:
   cancel-in-progress: true
 on:
   push:
-    paths-ignore:
-      - "docs/**"
-      - "**.md"
+    # Platform-scoped: a repair that only touches this workflow's scope
+    # must not restart (or concurrency-cancel) the other platform's run.
+    paths:
+      - ".github/workflows/ios-runtime.yml"
+      - "scripts/ci_runtime_stack.py"
+      - "mobile/**"
+      - "office_toolkit/**"
+      - "requirements.txt"
+  workflow_dispatch:
 jobs:
   runtime:
     runs-on: macos-latest
