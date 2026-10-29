@@ -52,6 +52,13 @@ jobs:
         run: echo "android.kotlinVersion=1.9.24" >> gradle.properties
       - name: Build debug APK with the runner's preinstalled Android SDK
         working-directory: mobile/android
+        # expo-constants' createExpoConfig gradle task re-evaluates
+        # app.config.js at BUILD time and bundles assets/app.config into
+        # the APK; without these the embedded endpoints fall back to
+        # app.json's localhost defaults (evidenced by scanning the APK).
+        env:
+          TOOLKIT_OIDC_ISSUER: http://10.0.2.2:8080/realms/office-toolkit
+          TOOLKIT_API_BASE_URL: http://10.0.2.2:5000
         run: ./gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
