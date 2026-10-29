@@ -33,6 +33,11 @@
   <h1>{% if mode == 'register' %}Create account{% else %}Sign in{% endif %}</h1>
   {% if disabled %}<p>{{ disabled }}</p>{% else %}
   {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  {% if mode == 'sso' %}
+  <p class="note" style="text-align:center; margin-top:16px">
+    <a href="/login/oidc">Sign in with SSO</a>
+  </p>
+  {% else %}
   <form method="post">
     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
     <input type="hidden" name="next" value="{{ next or '/' }}">
@@ -47,6 +52,7 @@
   <p class="note" style="text-align:center; margin-top:16px">
     <a href="/login/oidc">Sign in with SSO</a>
   </p>
+  {% endif %}
   {% endif %}
   {% endif %}
 </div>

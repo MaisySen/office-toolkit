@@ -196,15 +196,12 @@ def test_full_oidc_login_creates_sso_account(oidc_app, idp):
     row = store.db.execute("SELECT provider FROM users WHERE email=?",
                            ("sso-user@example.com",)).fetchone()
     assert row["provider"].startswith("oidc:")
-    # account is SSO-only: password login must refuse it
+    # SSO mode disables the local password route outright: no fallback
     client.get("/logout")
-    client.get("/login")
-    with client.session_transaction() as s:
-        s["_csrf"] = "pw-csrf"
     rv = client.post("/login", data={"email": "sso-user@example.com",
                                      "password": "whatever123",
                                      "_csrf": "pw-csrf"})
-    assert b"single sign-on" in rv.data
+    assert rv.status_code == 404
     # PKCE verifier actually reached the token endpoint
     assert idp._seen_verifier
 
@@ -323,3 +320,41 @@ def test_userinfo_sub_mismatch_rejected(oidc_app, idp):
     client, _ = oidc_app
     rv = run_login(client)
     assert rv.status_code == 400 and b"subject does not match" in rv.data
+
+
+class TestSsoModeGating:
+    """With a maintained IdP configured, the prototype local password
+    routes (register, login POST, bootstrap) must not survive as fallback;
+    the sign-in page offers SSO only. Dev mode (no IdP) keeps local auth."""
+
+    def test_register_get_disabled(self, oidc_app):
+        client, _ = oidc_app
+        assert client.get("/register").status_code == 404
+
+    def test_register_post_disabled_even_with_bootstrap(self, oidc_app):
+        client, _ = oidc_app
+        r = client.post("/register", data={
+            "email": "sneak@example.com", "password": "x" * 12,
+            "bootstrap_token": "anything"})
+        assert r.status_code == 404
+
+    def test_login_post_disabled(self, oidc_app):
+        client, _ = oidc_app
+        assert client.post("/login", data={
+            "email": "a@b.c", "password": "x" * 12}).status_code == 404
+
+    def test_login_page_is_sso_only(self, oidc_app):
+        client, _ = oidc_app
+        r = client.get("/login")
+        assert r.status_code == 200
+        body = r.get_data(as_text=True)
+        assert "Sign in with SSO" in body
+        assert 'name="password"' not in body
+        assert "Create one" not in body
+
+    def test_callback_error_page_shows_no_local_form(self, oidc_app):
+        client, _ = oidc_app
+        r = client.get("/login/oidc/callback?error=access_denied")
+        body = r.get_data(as_text=True)
+        assert "Sign in with SSO" in body
+        assert 'name="password"' not in body

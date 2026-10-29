@@ -58,6 +58,13 @@ if os.environ.get("TOOLKIT_OIDC_ISSUER"):
     )
 
 
+def local_auth_enabled() -> bool:
+    """Local email/password accounts are a dev-only mode. When a maintained
+    IdP is configured (TOOLKIT_OIDC_ISSUER), registration, local login and
+    bootstrap are disabled so no prototype path survives as a fallback."""
+    return oidc_client is None
+
+
 @app.get("/login/oidc")
 def oidc_start():
     if oidc_client is None:
@@ -74,7 +81,7 @@ def oidc_callback():
         abort(404)
 
     def fail(msg):
-        return render_template("auth.html", mode="login", error=msg,
+        return render_template("auth.html", mode="sso", error=msg,
                                disabled=None, next="/"), 400
 
     if request.args.get("error"):
@@ -446,6 +453,8 @@ def rate_limited() -> bool:
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    if not local_auth_enabled():
+        abort(404)  # accounts live at the configured IdP in SSO mode
     user_count = auth_store.db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
     if not REGISTRATION_OPEN and user_count > 0:
         return render_template("auth.html", mode="register", error=None,
@@ -476,6 +485,11 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if not local_auth_enabled():
+        if request.method == "POST":
+            abort(404)  # no local password login in SSO mode
+        return render_template("auth.html", mode="sso", error=None,
+                               disabled=None, next=request.args.get("next", "/"))
     if request.method == "POST":
         if not csrf_ok():
             return render_template("auth.html", mode="login",
