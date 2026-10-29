@@ -68,6 +68,13 @@ appId: au.fintex.officetoolkit
     timeout: 15000
 - takeScreenshot: picker-downloads
 - tapOn: "runtime-sample.pdf"
+# After the DocumentsUI picker closes, Maestro's driver keeps reading
+# the stale picker hierarchy: the uiautomator dump at failure time
+# contains text="Done: pages-jpeg.zip" yet the text assert never
+# matched. Relaunching without clearing state brings the existing
+# task forward and re-attaches the driver to the app's window.
+- launchApp:
+    clearState: false
 # The app runs the operation server-side, writes the result ZIP and
 # shows its own result line with a Share button. The system chooser
 # is not exposed to Maestro's hierarchy (proven: "Sharing 1 file" was
