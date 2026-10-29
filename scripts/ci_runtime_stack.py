@@ -32,7 +32,8 @@ def main():
             r = requests.post(
                 f"{KC}/realms/master/protocol/openid-connect/token",
                 data={"grant_type": "password", "client_id": "admin-cli",
-                      "username": "admin", "password": "admin"})
+                      "username": "admin", "password": "admin"},
+                timeout=5)
             last = f"HTTP {r.status_code}: {r.text[:300]}"
             if r.status_code == 200:
                 break

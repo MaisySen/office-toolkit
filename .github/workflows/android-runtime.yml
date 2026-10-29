@@ -113,19 +113,22 @@ jobs:
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
           echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
+          # No --hostname override: KC 26 derives the issuer from the
+          # request Host, so the app (reaching KC as 10.0.2.2:8080 via the
+          # hosts mapping) receives tokens with exactly the issuer the
+          # toolkit API pins, while runner-side tooling uses localhost.
           KC_BOOTSTRAP_ADMIN_USERNAME=admin \
           KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
           /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 \
-            --hostname http://10.0.2.2:8080 \
             > /tmp/kc.log 2>&1 &
           /tmp/mailpit --listen 127.0.0.1:8025 --smtp-listen 127.0.0.1:1025 > /tmp/mailpit.log 2>&1 &
           for i in $(seq 1 60); do
-            curl -sf http://localhost:8080/realms/master >/dev/null && break
+            curl -sf --max-time 5 http://localhost:8080/realms/master >/dev/null && break
             sleep 2
           done
-          curl -sf http://localhost:8080/realms/master >/dev/null \
+          curl -sf --max-time 5 http://localhost:8080/realms/master >/dev/null \
             || { tail -40 /tmp/kc.log; exit 1; }
-          KC_BASE=http://10.0.2.2:8080 \
+          KC_BASE=http://localhost:8080 \
           PUBLIC_ISSUER=http://10.0.2.2:8080/realms/office-toolkit \
             python3 scripts/ci_runtime_stack.py \
             || { tail -60 /tmp/kc.log; exit 1; }
