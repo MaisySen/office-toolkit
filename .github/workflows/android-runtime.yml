@@ -122,8 +122,11 @@ jobs:
           sudo ip addr add 10.0.2.2/32 dev lo || true
           KC_BOOTSTRAP_ADMIN_USERNAME=admin \
           KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+          # start-dev binds 127.0.0.1 only; the emulator-facing issuer is
+          # 10.0.2.2 (bound to lo above), so KC must listen on every
+          # interface for runner-side and emulator-side requests to agree.
           /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 \
-            > /tmp/kc.log 2>&1 &
+            --http-host 0.0.0.0 > /tmp/kc.log 2>&1 &
           /tmp/mailpit --listen 127.0.0.1:8025 --smtp-listen 127.0.0.1:1025 > /tmp/mailpit.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf --max-time 5 http://localhost:8080/realms/master >/dev/null && break

@@ -89,7 +89,14 @@ jobs:
           curl -sfL -o /tmp/maestro.zip \
             https://github.com/mobile-dev-inc/maestro/releases/latest/download/maestro.zip
           unzip -q -o /tmp/maestro.zip -d /tmp
-          MAESTRO_DIR=$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)
+          # macOS /tmp is a symlink to /private/tmp; plain find does not
+          # traverse it, so follow the starting-point link with -H.
+          MAESTRO_DIR=$(find -H /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)
+          test -x "$MAESTRO_DIR/bin/maestro" || {
+            echo "maestro binary not found after unzip; /tmp contains:"
+            ls -la /tmp | head -20
+            exit 1
+          }
           echo "$MAESTRO_DIR/bin" >> "$GITHUB_PATH"
       - name: Drive sign-in and the operation screen
         timeout-minutes: 15
