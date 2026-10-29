@@ -229,6 +229,9 @@ def self_registration_journey(auth, ctx):
     reg.first.click()
     page.wait_for_load_state("load")
     print("registration form:", page_summary(page))
+    inputs = page.eval_on_selector_all(
+        "input", "els => els.map(e => e.name + ':' + e.type)")
+    print("registration inputs:", inputs)
     page.fill('input[name="firstName"]', "Self")
     page.fill('input[name="lastName"]', "Registered")
     page.fill('input[name="email"]', SELF_EMAIL)
