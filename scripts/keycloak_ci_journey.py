@@ -61,9 +61,11 @@ def setup_realm(auth):
     print("realm + clients ready")
 
 
-def form_action(html):
+def form_action(html, base=KC):
     m = re.search(r'<form[^>]+action="([^"]+)"', html)
-    return m.group(1).replace("&amp;", "&") if m else None
+    if not m:
+        return None
+    return urllib.parse.urljoin(base, m.group(1).replace("&amp;", "&"))
 
 
 def mailpit_link(marker, since=0):
@@ -91,7 +93,7 @@ def registration_journey(auth):
     reg = re.search(r'href="([^"]*registration[^"]*)"', r.text)
     if not reg:
         fail("no registration link on the Keycloak login page")
-    r = s.get(reg.group(1).replace("&amp;", "&"))
+    r = s.get(urllib.parse.urljoin(KC, reg.group(1).replace("&amp;", "&")))
     action = form_action(r.text)
     r = s.post(action, data={
         "email": EMAIL, "firstName": "Journey", "lastName": "Test",
@@ -127,7 +129,7 @@ def reset_journey():
     fp = re.search(r'href="([^"]*reset-credentials[^"]*)"', r.text)
     if not fp:
         fail("no forgot-password link")
-    r = s.get(fp.group(1).replace("&amp;", "&"))
+    r = s.get(urllib.parse.urljoin(KC, fp.group(1).replace("&amp;", "&")))
     action = form_action(r.text)
     s.post(action, data={"username": EMAIL})
     link = mailpit_link("reset")
