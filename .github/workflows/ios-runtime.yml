@@ -33,7 +33,10 @@ jobs:
           tar -xzf /tmp/mailpit.tar.gz -C /tmp mailpit
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
-          /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 > /tmp/kc.log 2>&1 &
+          KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+          KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
+          /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 \
+            > /tmp/kc.log 2>&1 &
           /tmp/mailpit --listen 127.0.0.1:8025 --smtp-listen 127.0.0.1:1025 > /tmp/mailpit.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://localhost:8080/realms/master >/dev/null && break
@@ -41,7 +44,7 @@ jobs:
           done
           curl -sf http://localhost:8080/realms/master >/dev/null \
             || { tail -40 /tmp/kc.log; exit 1; }
-          python3 scripts/ci_runtime_stack.py
+          python3 scripts/ci_runtime_stack.py || { tail -60 /tmp/kc.log; exit 1; }
       - name: Install JS dependencies
         working-directory: mobile
         run: npm ci

@@ -26,19 +26,22 @@ def fail(msg):
 
 
 def main():
+    last = "no attempt completed"
     for _ in range(30):
         try:
             r = requests.post(
                 f"{KC}/realms/master/protocol/openid-connect/token",
                 data={"grant_type": "password", "client_id": "admin-cli",
                       "username": "admin", "password": "admin"})
+            last = f"HTTP {r.status_code}: {r.text[:300]}"
             if r.status_code == 200:
                 break
-        except requests.RequestException:
-            pass
+        except requests.RequestException as e:
+            last = f"{type(e).__name__}: {e}"
         time.sleep(2)
     else:
-        fail("Keycloak master realm never answered")
+        fail(f"admin token grant against {KC} never succeeded; "
+             f"last result: {last}")
     auth = {"Authorization": "Bearer " + r.json()["access_token"]}
 
     r = requests.post(f"{KC}/admin/realms", headers=auth, json={

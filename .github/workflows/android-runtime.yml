@@ -85,18 +85,17 @@ jobs:
         # longer equals the approved pin recorded in the script.
         run: |
           python3 scripts/ci_android_license.py \
+            --write-license-file "$ANDROID_HOME/licenses/android-sdk-license" \
             'build-tools;37.0.0' platform-tools 'platforms;android-34' \
             emulator 'system-images;android-34;google_apis;x86_64'
-      - name: Seed only the approved license and install (stdin closed)
-        # sdkmanager never sees an acceptance answer: the approved
-        # license is pre-recorded by its pinned hash, and stdin is
-        # closed so any unexpected prompt fails on EOF instead of being
-        # accepted. The post-check asserts no other license file exists.
+      - name: Install the five components (stdin closed)
+        # sdkmanager never sees an acceptance answer: the gate step
+        # pre-recorded the validated license by the exact hash sdkmanager
+        # computes, and stdin is closed so any unexpected prompt fails on
+        # EOF instead of being accepted. The post-check asserts that no
+        # license file other than the seeded one appears.
         run: |
-          mkdir -p "$ANDROID_HOME/licenses"
           ls "$ANDROID_HOME/licenses" | sort > /tmp/licenses.before
-          echo "a90c249c9e874a0ca1854dd16aa9827dec1430da" \
-            > "$ANDROID_HOME/licenses/android-sdk-license"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
             'build-tools;37.0.0' platform-tools 'platforms;android-34' \
             emulator 'system-images;android-34;google_apis;x86_64' \
@@ -114,8 +113,10 @@ jobs:
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
           echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
+          KC_BOOTSTRAP_ADMIN_USERNAME=admin \
+          KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
           /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 \
-            --hostname http://10.0.2.2:8080 --hostname-strict false \
+            --hostname http://10.0.2.2:8080 \
             > /tmp/kc.log 2>&1 &
           /tmp/mailpit --listen 127.0.0.1:8025 --smtp-listen 127.0.0.1:1025 > /tmp/mailpit.log 2>&1 &
           for i in $(seq 1 60); do
@@ -124,9 +125,10 @@ jobs:
           done
           curl -sf http://localhost:8080/realms/master >/dev/null \
             || { tail -40 /tmp/kc.log; exit 1; }
-          KC_BASE=http://localhost:8080 \
+          KC_BASE=http://10.0.2.2:8080 \
           PUBLIC_ISSUER=http://10.0.2.2:8080/realms/office-toolkit \
-            python3 scripts/ci_runtime_stack.py
+            python3 scripts/ci_runtime_stack.py \
+            || { tail -60 /tmp/kc.log; exit 1; }
       - name: Boot the emulator and install the APK
         run: |
           echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ci \
