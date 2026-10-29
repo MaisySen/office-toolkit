@@ -279,6 +279,13 @@ jobs:
                   assert d[:2] == b'\xff\xd8', f'{n} is not a JPEG'
                   Image.open(io.BytesIO(d)).verify()
               print(f'output OK: zip with {len(pages)} decodable JPEG page(s), {len(data)} bytes')
+              # Emit each page into the job log so the actual rendered
+              # page can be visually inspected, not only decoded.
+              import base64, sys
+              for n in pages:
+                  sys.stdout.write(f'---PAGE-BEGIN {n}---\n')
+                  sys.stdout.write(base64.b64encode(z.read(n)).decode() + '\n')
+                  sys.stdout.write('---PAGE-END---\n')
           else:
               assert data[:2] == b'\xff\xd8', f'not a JPEG or ZIP: {data[:16]!r}'
               Image.open(io.BytesIO(data)).verify()
