@@ -78,8 +78,9 @@ appId: au.fintex.officetoolkit
 - takeScreenshot: picker-files
 - tapOn: "runtime-sample.pdf"
 # The app runs the operation server-side, writes the result ZIP and
-# shows its own result line with a Share button.
+# shows its own result line with a Share button. Maestro matches text
+# as a full regular expression, so the pattern covers the file name.
 - extendedWaitUntil:
-    visible: "Done:"
+    visible: "Done: .+"
     timeout: 120000
 - takeScreenshot: operation-result

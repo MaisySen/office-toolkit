@@ -68,13 +68,12 @@ appId: au.fintex.officetoolkit
     timeout: 15000
 - takeScreenshot: picker-downloads
 - tapOn: "runtime-sample.pdf"
-# After the DocumentsUI picker closes, Maestro's driver keeps reading
-# the stale picker hierarchy: the uiautomator dump at failure time
-# contains text="Done: pages-jpeg.zip" yet the text assert never
-# matched. Relaunching without clearing state brings the existing
-# task forward and re-attaches the driver to the app's window.
-- launchApp:
-    clearState: false
+# Maestro text selectors are full regular expressions: "Done:" never
+# matches the rendered "Done: pages-jpeg.zip", which is why the result
+# line looked invisible after the picker closed even though the
+# uiautomator dump held it. Match the whole line instead and stay in the
+# same app task: a launchApp here stops the app by default and resets
+# navigation to the operation list.
 # The app runs the operation server-side, writes the result ZIP and
 # shows its own result line with a Share button. The system chooser
 # is not exposed to Maestro's hierarchy (proven: "Sharing 1 file" was
@@ -82,9 +81,9 @@ appId: au.fintex.officetoolkit
 # line, then exercise Share and dismiss the sheet without asserting
 # system text.
 - extendedWaitUntil:
-    visible: "Done:"
+    visible: "Done: .+"
     timeout: 120000
 - takeScreenshot: operation-result
 - tapOn: "Share"
 - back
-- assertVisible: "Done:"
+- assertVisible: "Done: .+"
