@@ -24,7 +24,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const redirectUri = AuthSession.makeRedirectUri({ scheme: "officetoolkit" });
+  const redirectUri = AuthSession.makeRedirectUri({ scheme: "officetoolkit", path: "auth" });
   const { ready, signIn } = useSignIn({ issuer, clientId, redirectUri });
 
   useEffect(() => {
