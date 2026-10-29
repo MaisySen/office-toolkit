@@ -206,11 +206,13 @@ def self_registration_journey(auth, ctx):
     params = {"response_type": "code", "client_id": "office-toolkit-web",
               "redirect_uri": APP + "/login/oidc/callback", "scope": "openid"}
     page = ctx.new_page()
-    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/auth?"
+    # The registrations endpoint is where the login page's Register link
+    # points; navigating directly is the same surface without depending on
+    # theme link text.
+    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/registrations?"
               + urllib.parse.urlencode(params))
-    page.wait_for_selector('a:has-text("Register")', timeout=15000)
-    page.locator('a:has-text("Register")').first.click()
     page.wait_for_load_state("load")
+    print("registration form:", page_summary(page))
     page.fill('input[name="firstName"]', "Self")
     page.fill('input[name="lastName"]', "Registered")
     page.fill('input[name="email"]', SELF_EMAIL)
