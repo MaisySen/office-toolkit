@@ -22,8 +22,13 @@ jobs:
             curl -sf http://localhost:9000/health/ready >/dev/null && break
             sleep 3
           done
-          curl -sf http://localhost:9000/health/ready
-          curl -sf http://localhost:8025/api/v1/messages
+          curl -sf http://localhost:9000/health/ready || { docker logs keycloak 2>&1 | tail -40; exit 1; }
+          for i in $(seq 1 20); do
+            curl -sf http://localhost:8025/api/v1/messages >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:8025/api/v1/messages >/dev/null || { docker logs mailpit 2>&1 | tail -20; exit 1; }
+          echo "keycloak and mailpit ready"
       - name: Install toolkit
         run: |
           sudo apt-get update -qq
