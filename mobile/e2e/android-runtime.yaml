@@ -68,17 +68,16 @@ appId: au.fintex.officetoolkit
     timeout: 15000
 - takeScreenshot: picker-downloads
 - tapOn: "runtime-sample.pdf"
-# The app runs the operation server-side, writes the result ZIP, sets
-# its result line and then opens the system share sheet over the app.
-# Maestro reads the top window, so the Done line stays invisible while
-# the chooser is up: wait for the sheet, dismiss it, then read the
-# app's own result line.
-- extendedWaitUntil:
-    visible: "Sharing"
-    timeout: 120000
-- takeScreenshot: share-sheet
-- back
+# The app runs the operation server-side, writes the result ZIP and
+# shows its own result line with a Share button. The system chooser
+# is not exposed to Maestro's hierarchy (proven: "Sharing 1 file" was
+# on screen while the text lookup failed), so read the app's result
+# line, then exercise Share and dismiss the sheet without asserting
+# system text.
 - extendedWaitUntil:
     visible: "Done:"
-    timeout: 30000
+    timeout: 120000
 - takeScreenshot: operation-result
+- tapOn: "Share"
+- back
+- assertVisible: "Done:"
