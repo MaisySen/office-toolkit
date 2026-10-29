@@ -68,6 +68,12 @@ jobs:
           TOOLKIT_OIDC_ISSUER: http://127.0.0.1:8080/realms/office-toolkit
           TOOLKIT_API_BASE_URL: http://127.0.0.1:5000
         run: |
+          # Keychain (expo-secure-store) fails with -34018
+          # errSecMissingEntitlement on an unsigned simulator binary:
+          # its entitlements are never embedded, so the default keychain
+          # access group cannot be resolved. Sign adhoc (identity -,
+          # no account or profile needed) so the keychain-access-groups
+          # entitlement from app.json reaches the binary.
           npx expo prebuild --platform ios --non-interactive --no-install --clean
           npx pod-install ios --non-interactive
           cd ios
@@ -75,7 +81,8 @@ jobs:
             -scheme OfficeToolkit -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build/dd \
-            CODE_SIGNING_ALLOWED=NO build
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=- build
       - name: Verify and boot an installed simulator runtime
         timeout-minutes: 15
         run: |

@@ -8,7 +8,12 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "au.fintex.officetoolkit"
+      "bundleIdentifier": "au.fintex.officetoolkit",
+      "entitlements": {
+        "keychain-access-groups": [
+          "$(AppIdentifierPrefix)au.fintex.officetoolkit"
+        ]
+      }
     },
     "android": {
       "package": "au.fintex.officetoolkit"
