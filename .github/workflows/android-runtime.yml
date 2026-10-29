@@ -251,20 +251,33 @@ jobs:
           "$ANDROID_HOME/platform-tools/adb" push /tmp/runtime-sample.pdf /sdcard/Download/runtime-sample.pdf
           maestro test mobile/e2e/android-runtime.yaml
       - name: Inspect the operation output file
-        # The app writes the server result into its files directory.
-        # PDF to JPEG returns a ZIP of JPEG pages (pages-jpeg.zip);
-        # pull it and verify every contained page decodes as a real
-        # JPEG. A bare JPEG output is accepted too.
-        if: success()
+        # Decoupled from the flow outcome: a text-matcher failure in
+        # the UI drive must not hide a completed output for a whole
+        # rebuild. Runs whenever the device is reachable; a missing
+        # file fails the step only when the flow itself succeeded (a
+        # real output fault), while a failed flow keeps its own
+        # failure status. The app writes the server result (a ZIP of
+        # JPEG pages, pages-jpeg.zip) into its files directory; pull
+        # it, verify every page decodes as a real JPEG and emit each
+        # page for visual inspection. A bare JPEG output is accepted
+        # too.
+        if: always()
         run: |
-          "$ANDROID_HOME/platform-tools/adb" root || true
-          "$ANDROID_HOME/platform-tools/adb" wait-for-device
-          OUT=$("$ANDROID_HOME/platform-tools/adb" shell 'ls -t /data/data/au.fintex.officetoolkit/files/ | grep -E "^pages-jpeg.*[.]zip$" | head -1' | tr -d '\r')
-          test -n "$OUT" || {
+          "$ANDROID_HOME/platform-tools/adb" root >/dev/null 2>&1 || true
+          if ! "$ANDROID_HOME/platform-tools/adb" get-state >/dev/null 2>&1; then
+            echo 'no device reachable; nothing to inspect'
+            exit 0
+          fi
+          OUT=$("$ANDROID_HOME/platform-tools/adb" shell 'ls -t /data/data/au.fintex.officetoolkit/files/ 2>/dev/null | grep -E "^pages-jpeg.*[.]zip$" | head -1' | tr -d '\r')
+          if [ -z "$OUT" ]; then
             echo 'no pages-jpeg output found; files dir holds:'
-            "$ANDROID_HOME/platform-tools/adb" shell 'ls /data/data/au.fintex.officetoolkit/files/'
-            exit 1
-          }
+            "$ANDROID_HOME/platform-tools/adb" shell 'ls /data/data/au.fintex.officetoolkit/files/ 2>/dev/null' || true
+            if [ "${{ steps.flow.outcome }}" = "success" ]; then
+              echo 'flow succeeded but produced no output file'
+              exit 1
+            fi
+            exit 0
+          fi
           "$ANDROID_HOME/platform-tools/adb" pull "/data/data/au.fintex.officetoolkit/files/$OUT" /tmp/op-output
           python3 - <<'PYEOF'
           import io, zipfile
