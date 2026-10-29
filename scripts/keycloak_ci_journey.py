@@ -205,11 +205,16 @@ def admin_user_journey(auth, ctx):
 
 
 def self_registration_journey(auth, ctx):
-    """Self-registration through the real Keycloak registration form,
-    verify-email from the confirmation mail, then toolkit login."""
+    """Self-registration through the real Keycloak registration form.
+    KC 26 registration is profile-first: the form itself collects no
+    password, so the account is completed through the required-action
+    chain (verify email via the mailbox, set password) in a real
+    browser, in whatever order Keycloak renders those pages."""
     # The web client enforces PKCE (S256), so even page rendering needs a
-    # challenge; the verifier is unused because the flow ends at the
-    # verify-email notice, never at a code exchange.
+    # challenge. The flow targets the toolkit callback: if Keycloak
+    # completes every required action it redirects into the app, which
+    # this journey accepts as a completion signal and then verifies with
+    # a fresh toolkit login below.
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(secrets.token_urlsafe(48).encode()).digest()
     ).rstrip(b"=").decode()
@@ -229,26 +234,58 @@ def self_registration_journey(auth, ctx):
     reg.first.click()
     page.wait_for_load_state("load")
     print("registration form:", page_summary(page))
-    inputs = page.eval_on_selector_all(
-        "input", "els => els.map(e => e.name + ':' + e.type)")
-    print("registration inputs:", inputs)
     page.fill('input[name="firstName"]', "Self")
     page.fill('input[name="lastName"]', "Registered")
     page.fill('input[name="email"]', SELF_EMAIL)
     if page.locator('input[name="username"]').count():
         page.fill('input[name="username"]', SELF_EMAIL)
-    page.fill('input[name="password"]', SELF_PASSWORD)
-    page.fill('input[name="password-confirm"]', SELF_PASSWORD)
+    if page.locator('input[name="password"]').count():
+        page.fill('input[name="password"]', SELF_PASSWORD)
+        page.fill('input[name="password-confirm"]', SELF_PASSWORD)
     page.locator('input[type="submit"], button[type="submit"]').first.click()
     page.wait_for_load_state("load")
-    low = page.inner_text("body").lower()
-    print("after registration submit:", page_summary(page))
-    if "verify your email" not in low:
-        fail("registration did not lead to the verify-email notice")
-    link, subject = mailpit_latest_link(SELF_EMAIL)
-    print("captured mail:", subject)
-    if not browser_action_link(page, link, SELF_EMAIL, SELF_PASSWORD):
-        fail("self-registration verify-email link did not complete")
+
+    # Required-action chain: verify-email notice/interstitial,
+    # update-password form, login form or completion can appear in any
+    # order; handle each by what the page actually shows.
+    used_link = False
+    for step in range(8):
+        print(f"post-registration step {step}:", page_summary(page))
+        low = page.inner_text("body").lower()
+        if page.url.startswith(APP):
+            break  # Keycloak completed the flow back into the toolkit
+        if "account has been updated" in low:
+            break
+        proceed = page.locator('a:has-text("Click here to proceed")')
+        if proceed.count():
+            proceed.first.click()
+            page.wait_for_load_state("load")
+            continue
+        if page.locator('input[name="password-confirm"]').count():
+            new_sel = ('input[name="password-new"]'
+                       if page.locator('input[name="password-new"]').count()
+                       else 'input[name="password"]')
+            page.fill(new_sel, SELF_PASSWORD)
+            page.fill('input[name="password-confirm"]', SELF_PASSWORD)
+            page.locator('input[type="submit"], button[type="submit"]').first.click()
+            page.wait_for_load_state("load")
+            continue
+        if page.locator('input[name="username"]').count():
+            page.fill('input[name="username"]', SELF_EMAIL)
+            page.fill('input[name="password"]', SELF_PASSWORD)
+            page.locator('input[type="submit"], button[type="submit"]').first.click()
+            page.wait_for_load_state("load")
+            continue
+        if "verify" in low and not used_link:
+            used_link = True
+            link, subject = mailpit_latest_link(SELF_EMAIL)
+            print("captured mail:", subject)
+            page.goto(link)
+            page.wait_for_load_state("load")
+            continue
+        fail("post-registration flow stuck on an unexpected page")
+    else:
+        fail("post-registration flow did not settle within 8 steps")
     if not user_state(auth, SELF_EMAIL).get("emailVerified"):
         fail("self-registered email not marked verified")
     login_via_toolkit(page, SELF_EMAIL, SELF_PASSWORD)
