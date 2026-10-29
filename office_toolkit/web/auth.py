@@ -65,6 +65,12 @@ CREATE TABLE IF NOT EXISTS clients (
     redirect_uris TEXT NOT NULL,   -- comma-separated, exact match
     public INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS oidc_states (
+    state TEXT PRIMARY KEY,
+    nonce TEXT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    expires_at REAL NOT NULL
+);
 """
 
 
@@ -77,6 +83,10 @@ class AuthStore:
         self.db = sqlite3.connect(db_path, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = [r["name"] for r in self.db.execute("PRAGMA table_info(users)")]
+        if "provider" not in cols:
+            self.db.execute("ALTER TABLE users ADD COLUMN provider "
+                            "TEXT NOT NULL DEFAULT 'local'")
         self.db.commit()
 
     # ------------------------------------------------------------ accounts
@@ -105,13 +115,18 @@ class AuthStore:
                               "WHERE email=?", (email,)).fetchone()
         if row and row["locked_until"] > time.time():
             raise ToolkitError("Too many failed attempts. Try again in a few minutes.")
-        user = self.db.execute("SELECT id, password_hash FROM users WHERE email=?",
-                               (email,)).fetchone()
+        user = self.db.execute(
+            "SELECT id, password_hash, provider FROM users WHERE email=?",
+            (email,)).fetchone()
         if not user:
             # equalise timing against user-enumeration via response time
             ph.hash("dummy-password")
             self._record_failure(email)
             raise ToolkitError("Wrong email or password.")
+        if user["provider"] != "local":
+            ph.hash("dummy-password")
+            raise ToolkitError("This account uses single sign-on. "
+                               "Use the SSO button on the login page.")
         try:
             ph.verify(user["password_hash"], password)
         except (VerificationError, VerifyMismatchError):
@@ -209,7 +224,54 @@ class AuthStore:
             raise ToolkitError("Refresh token misuse; all sessions for this account were revoked.")
         raise ToolkitError("Refresh token is invalid or expired.")
 
+    # ------------------------------------------------------------ oidc
+
+    def find_or_create_oidc_user(self, email: str, issuer: str) -> int:
+        # Resolve an SSO login to a local account. Never links silently: a
+        # pre-existing local password account with the same email stays
+        # password-only, so a misconfigured provider cannot take it over.
+        # Account linking is a deliberate manual step.
+        provider = "oidc:" + issuer.rstrip("/")
+        email = email.strip().lower()
+        row = self.db.execute("SELECT id, provider FROM users WHERE email=?",
+                              (email,)).fetchone()
+        if row:
+            if row["provider"] == provider:
+                return row["id"]
+            if row["provider"] == "local":
+                raise ToolkitError(
+                    "An account with this email already exists. "
+                    "Sign in with your password instead.")
+            raise ToolkitError("This email is registered with a different "
+                               "identity provider.")
+        cur = self.db.execute(
+            "INSERT INTO users (email, password_hash, created_at, provider) "
+            "VALUES (?,?,?,?)", (email, "", time.time(), provider))
+        self.db.commit()
+        return cur.lastrowid
+
+    OIDC_STATE_TTL = 600  # 10 minutes, single use
+
+    def save_oidc_state(self, state: str, nonce: str, code_verifier: str) -> None:
+        self.db.execute("DELETE FROM oidc_states WHERE expires_at<?", (time.time(),))
+        self.db.execute(
+            "INSERT INTO oidc_states (state, nonce, code_verifier, expires_at) "
+            "VALUES (?,?,?,?)", (state, nonce, code_verifier,
+                                 time.time() + self.OIDC_STATE_TTL))
+        self.db.commit()
+
+    def pop_oidc_state(self, state: str) -> dict | None:
+        # Consume a state row. Single use: a replayed state finds nothing.
+        row = self.db.execute("SELECT nonce, code_verifier, expires_at "
+                              "FROM oidc_states WHERE state=?", (state,)).fetchone()
+        self.db.execute("DELETE FROM oidc_states WHERE state=?", (state,))
+        self.db.commit()
+        if not row or row["expires_at"] < time.time():
+            return None
+        return {"nonce": row["nonce"], "code_verifier": row["code_verifier"]}
+
     # ------------------------------------------------------- web sessions
+
 
     def create_web_session(self, user_id: int) -> str:
         sid = secrets.token_urlsafe(24)

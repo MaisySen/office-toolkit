@@ -12,6 +12,8 @@ file; full audit in docs/dependencies.md):
 - reportlab - BSD-3-Clause
 - Flask and Werkzeug - BSD-3-Clause
 - argon2-cffi - MIT
+- authlib - BSD-3-Clause
+- requests - Apache-2.0
 - Tesseract OCR (invoked as an external tool) - Apache-2.0
 - LibreOffice (invoked as an external tool, conversion feature only) - MPL-2.0
 

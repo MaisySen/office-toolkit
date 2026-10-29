@@ -43,6 +43,11 @@
   </form>
   <p class="note">{% if mode == 'register' %}Have an account? <a href="/login">Sign in</a>
   {% else %}No account? <a href="/register">Create one</a>{% endif %}</p>
+  {% if oidc_enabled() %}
+  <p class="note" style="text-align:center; margin-top:16px">
+    <a href="/login/oidc">Sign in with SSO</a>
+  </p>
+  {% endif %}
   {% endif %}
 </div>
 </body>

@@ -40,13 +40,25 @@ No analytics, no third-party upload destinations.
   an image.
 - Replace short literal text in simple PDFs (no paragraph reflow)
 
-## Auth (dev branch)
+## Auth
 
-Self-hosted: no third-party identity service. Accounts in local SQLite,
-argon2id password hashing, session cookie for the web UI, and standard
-OAuth2 authorization-code + PKCE (S256) for the mobile app with rotating
-refresh tokens. First registered account bootstraps the install; later
-registration is closed unless TOOLKIT_REGISTRATION_OPEN=1.
+Self-hosted by default: no third-party identity service required. Accounts
+in local SQLite, argon2id password hashing, session cookie for the web UI,
+and standard OAuth2 authorization-code + PKCE (S256) for the mobile app
+with rotating refresh tokens. First registered account bootstraps the
+install; later registration is closed unless TOOLKIT_REGISTRATION_OPEN=1.
+
+Optional SSO: the web UI can delegate sign-in to a maintained external
+identity provider over OpenID Connect (authorization-code flow with PKCE,
+ID token verified by Authlib against the provider's JWKS). Set:
+
+    TOOLKIT_OIDC_ISSUER         e.g. https://idp.example.com/realms/main
+    TOOLKIT_OIDC_CLIENT_ID      client id registered at the provider
+    TOOLKIT_OIDC_CLIENT_SECRET  optional; public clients use PKCE only
+
+Register <app-url>/login/oidc/callback as the redirect URI at the provider.
+SSO logins map to local accounts by email; a pre-existing password account
+with the same email is never linked silently.
 
 ## Run
 
@@ -62,7 +74,7 @@ Then open http://127.0.0.1:5000
 
 ## Licence
 
-Not yet chosen; private use only until the owner selects one. The runtime path
+Apache-2.0, copyright Bidur Khatri; see LICENSE and NOTICE. The runtime path
 contains no AGPL component: OCR calls Tesseract directly after the earlier
 OCRmyPDF/Ghostscript design was removed. See `docs/dependencies.md`.
 Reintroducing any copyleft dependency is part of the owner's licence

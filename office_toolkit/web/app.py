@@ -43,6 +43,67 @@ auth_store.register_client(
                                "officetoolkit://auth,http://localhost:8081/auth").split(",") if r])
 
 # Stable base so a restart can recover and sweep orphans from a crashed run.
+OIDC_SCOPES = os.environ.get("TOOLKIT_OIDC_SCOPES", "openid email profile")
+oidc_client = None
+if os.environ.get("TOOLKIT_OIDC_ISSUER"):
+    from authlib.integrations.flask_client import OAuth
+    _oauth = OAuth(app)
+    oidc_client = _oauth.register(
+        "oidc",
+        client_id=os.environ.get("TOOLKIT_OIDC_CLIENT_ID", ""),
+        client_secret=os.environ.get("TOOLKIT_OIDC_CLIENT_SECRET", ""),
+        server_metadata_url=os.environ["TOOLKIT_OIDC_ISSUER"].rstrip("/")
+        + "/.well-known/openid-configuration",
+        client_kwargs={"scope": OIDC_SCOPES, "code_challenge_method": "S256"},
+    )
+
+
+@app.get("/login/oidc")
+def oidc_start():
+    if oidc_client is None:
+        abort(404)
+    nonce = secrets.token_urlsafe(24)
+    flask_session["oidc_nonce"] = nonce
+    redirect_uri = request.url_root.rstrip("/") + "/login/oidc/callback"
+    return oidc_client.authorize_redirect(redirect_uri, nonce=nonce)
+
+
+@app.get("/login/oidc/callback")
+def oidc_callback():
+    if oidc_client is None:
+        abort(404)
+
+    def fail(msg):
+        return render_template("auth.html", mode="login", error=msg,
+                               disabled=None, next="/"), 400
+
+    if request.args.get("error"):
+        return fail("Sign-in was cancelled or failed at the provider.")
+    nonce = flask_session.pop("oidc_nonce", None)
+    try:
+        token = oidc_client.authorize_access_token()
+        # authlib verifies the signature against the provider JWKS, and the
+        # iss, aud/azp, exp and iat claims; nonce binds the token to this
+        # browser session's login attempt.
+        claims = oidc_client.parse_id_token(token, nonce=nonce)
+    except Exception:
+        return fail("Sign-in could not be verified. Try again.")
+    email = (claims.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return fail("The identity provider did not supply a usable email. "
+                    "Map the email scope/claim for this client.")
+    if claims.get("email_verified") is False:
+        return fail("The identity provider reports this email as unverified.")
+    try:
+        uid = auth_store.find_or_create_oidc_user(email, claims.get("iss", ""))
+    except ToolkitError as e:
+        return fail(str(e))
+    flask_session.clear()  # session fixation: fresh session on privilege change
+    flask_session["sid"] = auth_store.create_web_session(uid)
+    flask_session["_csrf"] = secrets.token_urlsafe(24)
+    return flask_redirect("/")
+
+
 JOBS = os.path.join(tempfile.gettempdir(), "toolkit-jobs")
 os.makedirs(JOBS, exist_ok=True)
 JOB_TTL_SECONDS = 30 * 60
@@ -119,6 +180,7 @@ def csrf_token() -> str:
 
 
 app.jinja_env.globals["csrf_token"] = csrf_token
+app.jinja_env.globals["oidc_enabled"] = lambda: oidc_client is not None
 
 
 def csrf_ok() -> bool:

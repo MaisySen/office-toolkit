@@ -63,3 +63,31 @@ Trigger points to retire the bespoke provider: any production or public
 exposure, any SSO or MFA requirement, or a second organisation. At any of
 those, adopt Keycloak (Apache-2.0) as the IdP and retire the bespoke
 provider rather than extending it.
+
+## Update: web SSO relying party implemented (v0.2.0 work)
+
+The web UI can now delegate sign-in to a maintained external IdP over OIDC
+(TOOLKIT_OIDC_* env vars; see README). The relying-party side is built on
+Authlib (BSD-3-Clause, maintained), not a bespoke token parser: Authlib
+fetches the discovery document and JWKS, and validates the ID token
+signature, issuer, audience/authorized party, expiry and nonce. PKCE S256
+is enforced on the authorization request, state and nonce are bound to the
+browser session by Authlib's Flask integration, and the callback issues a
+fresh server-side session (fixation-safe).
+
+Deliberate choices:
+
+- SSO accounts are keyed by email per issuer and never silently linked onto
+  an existing password account with the same email, so a misconfigured or
+  hostile provider cannot take over a local account. Linking stays manual.
+- SSO-only accounts cannot sign in with a password.
+- The built-in provider remains the default; SSO activates only when an
+  issuer is configured. Mobile still uses the built-in OAuth2+PKCE flow.
+- The hand-rolled verification module drafted earlier in this branch was
+  replaced by Authlib before merge, on review feedback that maintained RP
+  code beats no-new-dependency bespoke security code.
+
+Not yet done: end-to-end verification against a real maintained IdP
+(currently covered by a full-flow fake-IdP integration test over real HTTP,
+including negative signature/audience/issuer/expiry/nonce/state-replay
+cases), MFA, and mobile OIDC discovery.
