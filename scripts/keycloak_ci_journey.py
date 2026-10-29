@@ -99,7 +99,8 @@ def clean_text(html, limit=300):
 def page_state(r):
     uname = 'name="username"' in r.text
     pwc = 'name="password-confirm"' in r.text
-    return (f"status={r.status_code} url={r.url[:110]} "
+    safe_url = r.url.split("?", 1)[0]
+    return (f"status={r.status_code} url={safe_url[:110]} "
             f"hist={[h.status_code for h in r.history]} "
             f"cookies={sorted(r.cookies.keys())} "
             f"username_form={uname} pw_confirm={pwc} "
@@ -110,7 +111,7 @@ def complete_action_link(link, password, new_password=None):
     """Complete a Keycloak action-token link: it shows the login form first
     (action executes after authentication), then possibly a password form.
     Logs full request and response evidence at every step."""
-    print("action link:", link[:70] + "..." + link[-8:])
+    print("action link path:", urllib.parse.urlsplit(link).path)
     s = requests.Session()
     r = s.get(link)
     print("GET link ->", page_state(r))
@@ -149,7 +150,8 @@ def login_via_toolkit(s, password):
         fail(f"login post: {r.status_code}")
     r = s.get(r.headers["Location"], allow_redirects=False)
     if r.status_code != 302 or r.headers.get("Location") != "/":
-        fail(f"toolkit callback: {r.status_code} {r.headers.get('Location')}")
+        loc = (r.headers.get('Location') or '').split('?', 1)[0]
+        fail(f"toolkit callback: {r.status_code} {loc}")
     if s.get(f"{APP}/").status_code != 200:
         fail("home page after login")
     print("toolkit OIDC login OK (password verified)")
