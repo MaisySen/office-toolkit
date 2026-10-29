@@ -626,8 +626,10 @@ def login():
         flask_session["sid"] = auth_store.create_web_session(uid)
         flask_session["_csrf"] = secrets.token_urlsafe(24)
         nxt = request.args.get("next") or request.form.get("next") or "/"
-        # local paths only; "//host" is a protocol-relative external URL
-        if not nxt.startswith("/") or nxt.startswith("//"):
+        # local paths only: "//host" is protocol-relative and browsers
+        # also normalise "/\host" to it, so both forms are external
+        if (not nxt.startswith("/") or nxt.startswith("//")
+                or nxt.startswith("/\\")):
             nxt = "/"
         return flask_redirect(nxt)
     return render_template("auth.html", mode="login", error=None, disabled=None,

@@ -503,3 +503,58 @@ class TestIdpBearerTokens:
         webapp._JWKS_CACHE.clear()
         idp.jwks_down = True
         assert self._call(client, _mint_access_token(idp)).status_code == 401
+
+
+class TestSsoModeLegacyDenial:
+    """In SSO mode the legacy local IdP endpoints, local password login
+    and locally minted opaque bearer tokens must all be dead ends; no
+    fallback path survives next to the real provider."""
+
+    def test_legacy_authorize_404(self, oidc_app):
+        client, _ = oidc_app
+        r = client.get("/oauth/authorize?client_id=officetoolkit"
+                       "&redirect_uri=officetoolkit://auth&response_type=code")
+        assert r.status_code == 404
+
+    def test_legacy_token_404(self, oidc_app):
+        client, _ = oidc_app
+        r = client.post("/oauth/token", data={
+            "grant_type": "authorization_code", "code": "x",
+            "client_id": "officetoolkit"})
+        assert r.status_code == 404
+
+    def test_local_opaque_bearer_rejected(self, oidc_app):
+        client, store = oidc_app
+        uid = store.register("legacy@example.com", "password-123")
+        store.register_client("officetoolkit", ["officetoolkit://auth"])
+        pair = store._issue_token_pair(uid, "officetoolkit")
+        r = client.post("/api/run/to-jpeg", headers={
+            "Authorization": f"Bearer {pair['access_token']}"})
+        assert r.status_code == 401
+
+    def test_local_password_login_404(self, oidc_app):
+        client, _ = oidc_app
+        r = client.post("/login", data={"email": "a@b.c", "password": "x"})
+        assert r.status_code == 404
+
+    def test_register_404(self, oidc_app):
+        client, _ = oidc_app
+        assert client.get("/register").status_code == 404
+        assert client.post("/register", data={}).status_code == 404
+
+
+def test_sso_mode_requires_secret_key():
+    """Importing the app with an OIDC issuer but no TOOLKIT_SECRET_KEY
+    must fail closed, not fall back to a per-process random secret."""
+    import os
+    import pathlib
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k != "TOOLKIT_SECRET_KEY"}
+    env["TOOLKIT_OIDC_ISSUER"] = "http://idp.example/realms/x"
+    p = subprocess.run(
+        [sys.executable, "-c", "import office_toolkit.web.app"],
+        env=env, capture_output=True, text=True,
+        cwd=str(pathlib.Path(__file__).resolve().parents[1]))
+    assert p.returncode != 0
+    assert "TOOLKIT_SECRET_KEY" in p.stderr

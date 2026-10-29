@@ -262,3 +262,39 @@ def test_login_rejects_missing_csrf_token(anon_client):
     rv = anon_client.post("/login", data={"email": "user@example.com",
                                           "password": "correct horse"})
     assert rv.status_code == 400
+
+
+def _fresh_local_client(tmp_path, monkeypatch, name):
+    from office_toolkit.web.auth import AuthStore
+    from office_toolkit.web import app as webapp
+    store = AuthStore(str(tmp_path / name))
+    monkeypatch.setattr(webapp, "auth_store", store)
+    webapp.app.config["TESTING"] = True
+    c = webapp.app.test_client()
+    store.register("user@example.com", "correct horse")
+    c.get("/login")
+    with c.session_transaction() as s:
+        s["_csrf"] = "test-csrf"
+    return c
+
+
+@pytest.mark.parametrize("evil", ["//evil.example/x", "https://evil.example/x",
+                                  "/\\evil.example", "//foo@evil.example"])
+def test_login_next_rejects_external_redirect(tmp_path, monkeypatch, evil):
+    """The post-login next parameter must never bounce the browser to an
+    external origin; protocol-relative URLs start with a slash too."""
+    c = _fresh_local_client(tmp_path, monkeypatch, "auth-evil.db")
+    r = c.post("/login", query_string={"next": evil},
+               data={"email": "user@example.com",
+                     "password": "correct horse", "_csrf": "test-csrf"})
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/"
+
+
+def test_login_next_keeps_local_path(tmp_path, monkeypatch):
+    c = _fresh_local_client(tmp_path, monkeypatch, "auth-local.db")
+    r = c.post("/login", query_string={"next": "/run/to-jpeg"},
+               data={"email": "user@example.com",
+                     "password": "correct horse", "_csrf": "test-csrf"})
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/run/to-jpeg"
