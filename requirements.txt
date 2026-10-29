@@ -6,3 +6,4 @@ reportlab>=3.6
 flask>=3
 python-docx
 openpyxl
+argon2-cffi>=23
