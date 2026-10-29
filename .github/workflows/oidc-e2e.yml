@@ -34,6 +34,11 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libreoffice-writer libreoffice-calc tesseract-ocr >/dev/null
           pip install -r requirements.txt
+      - name: Install Playwright chromium
+        run: |
+          pip install playwright
+          sudo python -m playwright install-deps chromium
+          python -m playwright install chromium
       - name: Run the full journey
         run: python scripts/keycloak_ci_journey.py
         env:

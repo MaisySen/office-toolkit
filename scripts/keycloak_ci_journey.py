@@ -1,16 +1,24 @@
 """Full identity journey against a real Keycloak (started by the CI job),
-with email captured by Mailpit. Covers: realm/client setup, registration
-with email verification, login, password reset, and the mobile PKCE flow.
-Fails loudly on any broken step. No external mail leaves the runner."""
+with email captured by Mailpit. Covers: realm/client setup, admin-created
+user with email verification, self-registration through the Keycloak UI,
+password reset via action email, toolkit OIDC login, and the mobile PKCE
+flow. Interactive pages are driven by a real browser (Playwright chromium);
+API surfaces use requests. Fails loudly on any broken step. No external
+mail leaves the runner. Diagnostics mask URLs to their path only."""
+import base64
+import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import time
 import urllib.parse
 
 import requests
+from playwright.sync_api import TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
 KC = "http://localhost:8080"
 MAILPIT = "http://localhost:8025"
@@ -19,6 +27,8 @@ APP = "http://localhost:5050"
 EMAIL = "journey.test@example.com"
 PASSWORD = "correct horse battery"
 NEW_PASSWORD = "a fresh password 99"
+SELF_EMAIL = "self.registration@example.com"
+SELF_PASSWORD = "self registered pass 42"
 
 
 def fail(msg):
@@ -63,22 +73,13 @@ def setup_realm(auth):
     print("realm + clients ready")
 
 
-def form_action(html, base=KC):
-    m = re.search(r"<form[^>]+action=[\']([^\']+)[\']", html)
-    if not m:
-        m = re.search(r'<form[^>]+action="([^"]+)"', html)
-    if not m:
-        return None
-    return urllib.parse.urljoin(base, m.group(1).replace("&amp;", "&"))
-
-
-def mailpit_latest_link(timeout_s=60):
-    """Wait for the newest Mailpit message to EMAIL; return its first KC link."""
+def mailpit_latest_link(to_addr, timeout_s=60):
+    """Wait for the newest Mailpit message to to_addr; return its KC link."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         r = requests.get(f"{MAILPIT}/api/v1/messages")
         for msg in r.json().get("messages", []):
-            if msg["To"][0]["Address"] != EMAIL:
+            if msg["To"][0]["Address"] != to_addr:
                 continue
             full = requests.get(f"{MAILPIT}/api/v1/message/{msg['ID']}").json()
             body = full.get("Text", "") + full.get("HTML", "")
@@ -87,99 +88,78 @@ def mailpit_latest_link(timeout_s=60):
                 url = m.group(0).replace("&amp;", "&").rstrip(".,;'")
                 return url, full.get("Subject", "")
         time.sleep(2)
-    fail("no mail for the journey user arrived")
+    fail(f"no mail for {to_addr} arrived")
 
 
-def clean_text(html, limit=300):
-    t = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
-    t = re.sub(r"<[^>]+>", " ", t)
-    return re.sub(r"\s+", " ", t).strip()[:limit]
+def page_summary(page):
+    path = urllib.parse.urlsplit(page.url).path
+    text = re.sub(r"\s+", " ", page.inner_text("body")).strip()[:200]
+    return f"path={path} title={page.title()!r} text={text!r}"
 
 
-def page_state(r):
-    uname = 'name="username"' in r.text
-    pwc = 'name="password-confirm"' in r.text
-    safe_url = r.url.split("?", 1)[0]
-    return (f"status={r.status_code} url={safe_url[:110]} "
-            f"hist={[h.status_code for h in r.history]} "
-            f"cookies={sorted(r.cookies.keys())} "
-            f"username_form={uname} pw_confirm={pwc} "
-            f"text={clean_text(r.text)!r}")
-
-
-def complete_action_link(link, password, new_password=None):
-    """Complete a Keycloak action-token link: it shows the login form first
-    (action executes after authentication), then possibly a password form.
-    Logs full request and response evidence at every step."""
+def browser_action_link(page, link, username, password, new_password=None):
+    """Complete a Keycloak action-token link in a real browser: KC may show
+    a confirmation interstitial, then a login form (the action executes
+    after authentication), then possibly a password form."""
     print("action link path:", urllib.parse.urlsplit(link).path)
-    s = requests.Session()
-    r = s.get(link)
-    print("GET link ->", page_state(r))
+    page.goto(link)
     for step in range(6):
-        action = form_action(r.text)
-        if action is None:
-            anchors = re.findall(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-                                 r.text, re.S)
-            summary = []
-            proceed = None
-            for href, label in anchors:
-                sp = urllib.parse.urlsplit(href.replace("&amp;", "&"))
-                names = sorted(k for k, _ in urllib.parse.parse_qsl(sp.query))
-                summary.append({"text": clean_text(label, 40),
-                                "path": sp.path, "params": names})
-                if "proceed" in clean_text(label, 60).lower():
-                    proceed = urllib.parse.urljoin(KC, sp.geturl())
-            print(f"step {step}: no form; anchors:", json.dumps(summary))
-            if proceed and proceed != r.url:
-                r = s.get(proceed)
-                print(f"step {step} proceed ->", page_state(r))
-                continue
-            if proceed:
-                print(f"step {step}: proceed link loops to the same URL")
-            break
-        if 'name="username"' in r.text:
-            r = s.post(action, data={"username": EMAIL, "password": password})
-        elif 'name="password-confirm"' in r.text:
-            if new_password is None:
-                break
-            r = s.post(action, data={"password": new_password,
-                                     "password-confirm": new_password})
-        else:
-            print(f"step {step}: form has neither username nor password-confirm")
-            break
-        print(f"step {step} post ->", page_state(r))
-        if "account has been updated" in clean_text(r.text, 2000).lower():
+        print(f"action step {step}:", page_summary(page))
+        low = page.inner_text("body").lower()
+        if "account has been updated" in low:
             return True
-    return "account has been updated" in clean_text(r.text, 2000).lower()
+        proceed = page.locator('a:has-text("Click here to proceed")')
+        if proceed.count():
+            proceed.first.click()
+            page.wait_for_load_state("load")
+            continue
+        if page.locator('input[name="username"]').count():
+            page.fill('input[name="username"]', username)
+            page.fill('input[name="password"]', password)
+            page.locator('input[type="submit"], button[type="submit"]').first.click()
+            page.wait_for_load_state("load")
+            continue
+        if page.locator('input[name="password-confirm"]').count() and new_password:
+            page.fill('input[name="password"]', new_password)
+            page.fill('input[name="password-confirm"]', new_password)
+            page.locator('input[type="submit"], button[type="submit"]').first.click()
+            page.wait_for_load_state("load")
+            continue
+        break
+    return "account has been updated" in page.inner_text("body").lower()
 
 
-def login_via_toolkit(s, password):
-    """Drive /login/oidc -> Keycloak login form -> toolkit callback."""
-    r = s.get(f"{APP}/login/oidc", allow_redirects=False)
-    r = s.get(r.headers["Location"])
-    action = form_action(r.text)
-    if action is None:
-        print(r.text[:1200])
-        fail("no form on the Keycloak login page")
-    r = s.post(action, data={"username": EMAIL, "password": password},
-               allow_redirects=False)
-    if r.status_code not in (302, 303):
-        fail(f"login post: {r.status_code}")
-    r = s.get(r.headers["Location"], allow_redirects=False)
-    if r.status_code != 302 or r.headers.get("Location") != "/":
-        loc = (r.headers.get('Location') or '').split('?', 1)[0]
-        fail(f"toolkit callback: {r.status_code} {loc}")
-    if s.get(f"{APP}/").status_code != 200:
-        fail("home page after login")
-    print("toolkit OIDC login OK (password verified)")
+def login_via_toolkit(page, username, password):
+    """Drive /login/oidc -> Keycloak login -> toolkit callback. Handles both
+    a fresh context (login form) and an existing KC session (SSO auto-login)."""
+    page.goto(f"{APP}/login/oidc")
+    page.wait_for_load_state("load")
+    try:
+        page.wait_for_url(APP + "/", timeout=4000)
+    except PWTimeout:
+        page.wait_for_selector('input[name="username"]', timeout=15000)
+        page.fill('input[name="username"]', username)
+        page.fill('input[name="password"]', password)
+        page.locator('input[type="submit"], button[type="submit"]').first.click()
+        page.wait_for_url(APP + "/", timeout=15000)
+    resp = page.goto(APP + "/")
+    if resp is None or resp.status != 200:
+        fail(f"home page after login: {resp and resp.status}")
+    print(f"toolkit OIDC login OK for {username} (password verified)")
 
 
-def registration_journey(auth):
-    """User creation + verify-email through real Keycloak mail, then login.
+def user_state(auth, email):
+    users = requests.get(f"{KC}/admin/realms/{REALM}/users",
+                         headers=auth, params={"email": email}).json()
+    if not users:
+        fail(f"user {email} not found")
+    return requests.get(
+        f"{KC}/admin/realms/{REALM}/users/{users[0]['id']}",
+        headers=auth).json()
 
-    The Keycloak-hosted registration form is Keycloak's own tested surface;
-    this journey exercises our integration: realm flags, mail delivery,
-    verification completion, and the toolkit OIDC callback."""
+
+def admin_user_journey(auth, ctx):
+    """Admin-created user + verify-email through real Keycloak mail, login."""
     r = requests.post(f"{KC}/admin/realms/{REALM}/users", headers=auth, json={
         "username": EMAIL, "email": EMAIL, "firstName": "Journey",
         "lastName": "Test", "enabled": True, "emailVerified": False,
@@ -187,24 +167,20 @@ def registration_journey(auth):
                          "temporary": False}]})
     if r.status_code not in (201, 409):
         fail(f"user create: {r.status_code} {r.text[:200]}")
-    uid = requests.get(f"{KC}/admin/realms/{REALM}/users",
-                       headers=auth, params={"email": EMAIL}).json()[0]["id"]
+    uid = user_state(auth, EMAIL)["id"]
     r = requests.put(f"{KC}/admin/realms/{REALM}/users/{uid}/execute-actions-email",
                      headers=auth, json=["VERIFY_EMAIL"])
     if r.status_code not in (200, 204):
         fail(f"send verify email: {r.status_code} {r.text[:200]}")
-    link, subject = mailpit_latest_link()
+    link, subject = mailpit_latest_link(EMAIL)
     print("captured mail:", subject)
-    if not complete_action_link(link, PASSWORD):
-        st = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
-                          headers=auth).json()
+    page = ctx.new_page()
+    if not browser_action_link(page, link, EMAIL, PASSWORD):
         print("user state on failure:", json.dumps(
-            {k: st.get(k) for k in ("enabled", "emailVerified",
-                                    "requiredActions")}))
+            {k: user_state(auth, EMAIL).get(k)
+             for k in ("enabled", "emailVerified", "requiredActions")}))
         fail("verify-email action link did not complete")
-    status = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
-                          headers=auth).json()
-    if not status.get("emailVerified"):
+    if not user_state(auth, EMAIL).get("emailVerified"):
         fail("email not marked verified after completing the link")
     print("verify-email journey OK")
     dg = requests.post(f"{KC}/realms/{REALM}/protocol/openid-connect/token",
@@ -216,45 +192,92 @@ def registration_journey(auth):
               if dg.headers.get("content-type", "").startswith("application/json")
               else dg.text[:120])
     print("direct-grant check after verification:", dg.status_code, dg_err)
-    s = requests.Session()
-    login_via_toolkit(s, PASSWORD)
+    login_via_toolkit(page, EMAIL, PASSWORD)
 
 
-def reset_journey(auth):
-    uid = requests.get(f"{KC}/admin/realms/{REALM}/users",
-                       headers=auth, params={"email": EMAIL}).json()[0]["id"]
+def self_registration_journey(auth, ctx):
+    """Self-registration through the real Keycloak registration form,
+    verify-email from the confirmation mail, then toolkit login."""
+    params = {"response_type": "code", "client_id": "office-toolkit-web",
+              "redirect_uri": APP + "/login/oidc/callback", "scope": "openid"}
+    page = ctx.new_page()
+    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/auth?"
+              + urllib.parse.urlencode(params))
+    page.wait_for_selector('a:has-text("Register")', timeout=15000)
+    page.locator('a:has-text("Register")').first.click()
+    page.wait_for_load_state("load")
+    page.fill('input[name="firstName"]', "Self")
+    page.fill('input[name="lastName"]', "Registered")
+    page.fill('input[name="email"]', SELF_EMAIL)
+    if page.locator('input[name="username"]').count():
+        page.fill('input[name="username"]', SELF_EMAIL)
+    page.fill('input[name="password"]', SELF_PASSWORD)
+    page.fill('input[name="password-confirm"]', SELF_PASSWORD)
+    page.locator('input[type="submit"], button[type="submit"]').first.click()
+    page.wait_for_load_state("load")
+    low = page.inner_text("body").lower()
+    print("after registration submit:", page_summary(page))
+    if "verify your email" not in low:
+        fail("registration did not lead to the verify-email notice")
+    link, subject = mailpit_latest_link(SELF_EMAIL)
+    print("captured mail:", subject)
+    if not browser_action_link(page, link, SELF_EMAIL, SELF_PASSWORD):
+        fail("self-registration verify-email link did not complete")
+    if not user_state(auth, SELF_EMAIL).get("emailVerified"):
+        fail("self-registered email not marked verified")
+    login_via_toolkit(page, SELF_EMAIL, SELF_PASSWORD)
+    print("self-registration journey OK")
+
+
+def reset_journey(auth, ctx):
+    uid = user_state(auth, EMAIL)["id"]
     r = requests.put(f"{KC}/admin/realms/{REALM}/users/{uid}/execute-actions-email",
                      headers=auth, json=["UPDATE_PASSWORD"])
     if r.status_code not in (200, 204):
         fail(f"send reset email: {r.status_code} {r.text[:200]}")
-    link, subject = mailpit_latest_link()
+    link, subject = mailpit_latest_link(EMAIL)
     print("captured mail:", subject)
-    if not complete_action_link(link, PASSWORD, new_password=NEW_PASSWORD):
+    page = ctx.new_page()
+    if not browser_action_link(page, link, EMAIL, PASSWORD,
+                               new_password=NEW_PASSWORD):
         fail("update-password action link did not complete")
-    s2 = requests.Session()
-    login_via_toolkit(s2, NEW_PASSWORD)
+    login_via_toolkit(page, EMAIL, NEW_PASSWORD)
     print("password reset journey OK")
 
 
-def mobile_pkce_journey():
-    import base64, hashlib, secrets
+def mobile_pkce_journey(ctx):
     verifier = secrets.token_urlsafe(48)
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    s = requests.Session()
     params = {"response_type": "code", "client_id": "office-toolkit-mobile",
               "redirect_uri": "http://localhost:8081/auth",
               "scope": "openid email profile",
               "code_challenge": challenge, "code_challenge_method": "S256"}
-    r = s.get(f"{KC}/realms/{REALM}/protocol/openid-connect/auth",
-              params=params)
-    action = form_action(r.text)
-    r = s.post(action, data={"username": EMAIL, "password": NEW_PASSWORD},
-               allow_redirects=False)
-    if r.status_code not in (302, 303) or "code=" not in r.headers.get("Location", ""):
-        fail(f"mobile authorize: {r.status_code}")
+    page = ctx.new_page()
+    captured = {}
+
+    def on_request(req):
+        if req.url.startswith("http://localhost:8081/auth"):
+            captured.setdefault("url", req.url)
+
+    ctx.on("request", on_request)
+    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/auth?"
+              + urllib.parse.urlencode(params))
+    page.wait_for_selector('input[name="username"]', timeout=15000)
+    page.fill('input[name="username"]', EMAIL)
+    page.fill('input[name="password"]', NEW_PASSWORD)
+    page.locator('input[type="submit"], button[type="submit"]').first.click()
+    for _ in range(30):
+        if "url" in captured:
+            break
+        time.sleep(0.5)
+    if "url" not in captured:
+        print("state:", page_summary(page))
+        fail("mobile authorize: no redirect to the app callback captured")
     code = urllib.parse.parse_qs(
-        urllib.parse.urlparse(r.headers["Location"]).query)["code"][0]
+        urllib.parse.urlsplit(captured["url"]).query).get("code", [None])[0]
+    if not code:
+        fail("mobile authorize: redirect carried no code")
     r = requests.post(f"{KC}/realms/{REALM}/protocol/openid-connect/token",
                       data={"grant_type": "authorization_code", "code": code,
                             "client_id": "office-toolkit-mobile",
@@ -288,9 +311,15 @@ def main():
                 break
             except requests.RequestException:
                 time.sleep(1)
-        registration_journey(auth)
-        reset_journey(auth)
-        mobile_pkce_journey()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch()
+            try:
+                admin_user_journey(auth, browser.new_context())
+                reset_journey(auth, browser.new_context())
+                self_registration_journey(auth, browser.new_context())
+                mobile_pkce_journey(browser.new_context())
+            finally:
+                browser.close()
     finally:
         proc.terminate()
     print("ALL JOURNEYS GREEN")
