@@ -37,7 +37,7 @@ jobs:
       - name: Install Playwright chromium
         run: |
           pip install playwright
-          sudo python -m playwright install-deps chromium
+          sudo env "PATH=$PATH" python -m playwright install-deps chromium
           python -m playwright install chromium
       - name: Run the full journey
         run: python scripts/keycloak_ci_journey.py
