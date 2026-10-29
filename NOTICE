@@ -1,0 +1,19 @@
+Office Toolkit
+Copyright 2026 Bidur Khatri
+
+This product includes software developed by third parties. Runtime
+dependencies and their licences (verified from each project's licence
+file; full audit in docs/dependencies.md):
+
+- pikepdf - MPL-2.0
+- pypdf - BSD-3-Clause
+- pypdfium2 - BSD-3-Clause / Apache-2.0
+- Pillow - HPND (CMU licence)
+- reportlab - BSD-3-Clause
+- Flask and Werkzeug - BSD-3-Clause
+- argon2-cffi - MIT
+- Tesseract OCR (invoked as an external tool) - Apache-2.0
+- LibreOffice (invoked as an external tool, conversion feature only) - MPL-2.0
+
+All are used unmodified. MPL-2.0 components remain under their own
+licence; their source is available from their respective projects.

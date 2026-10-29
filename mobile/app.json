@@ -1,0 +1,23 @@
+{
+  "expo": {
+    "name": "Office Toolkit",
+    "slug": "office-toolkit",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "officetoolkit",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "au.fintex.officetoolkit"
+    },
+    "android": {
+      "package": "au.fintex.officetoolkit"
+    },
+    "extra": {
+      "apiBaseUrl": "http://localhost:5000"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
+  }
+}

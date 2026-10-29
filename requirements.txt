@@ -1,0 +1,8 @@
+pikepdf>=5
+pypdf>=6
+pypdfium2>=4
+Pillow>=10
+reportlab>=3.6
+flask>=3
+python-docx
+openpyxl

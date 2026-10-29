@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+/tmp/
+*.egg-info/
+.deploy/
+mobile/node_modules/
