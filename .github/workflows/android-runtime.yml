@@ -181,12 +181,23 @@ jobs:
       - name: Boot the emulator and install the APK
         timeout-minutes: 15
         run: |
+          # Without --device, avdmanager asks about a custom hardware
+          # profile; on current cmdline-tools that prompt makes it exit
+          # silently with no AVD. Pin a device and verify the AVD exists.
           echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ci \
-            -k 'system-images;android-34;google_apis;x86_64' --force
+            -k 'system-images;android-34;google_apis;x86_64' --force --device 'pixel_6'
+          test -f "$HOME/.android/avd/ci.ini" || {
+            echo 'AVD ci was not created; known devices:'
+            "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" list device | head -20
+            exit 1
+          }
           "$ANDROID_HOME/emulator/emulator" -avd ci -no-window \
             -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim &
-          "$ANDROID_HOME/platform-tools/adb" wait-for-device
-          "$ANDROID_HOME/platform-tools/adb" shell 'while [ -z "$(getprop sys.boot_completed)" ]; do sleep 2; done'
+          timeout 420 "$ANDROID_HOME/platform-tools/adb" wait-for-device \
+            || { echo 'emulator never appeared on adb'; exit 1; }
+          timeout 420 "$ANDROID_HOME/platform-tools/adb" \
+            shell 'while [ -z "$(getprop sys.boot_completed)" ]; do sleep 2; done' \
+            || { echo 'emulator boot never completed'; exit 1; }
       - uses: actions/download-artifact@v4
         with:
           name: office-toolkit-runtime-apk
