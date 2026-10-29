@@ -61,6 +61,7 @@ jobs:
           xcodebuild -workspace OfficeToolkit.xcworkspace \
             -scheme OfficeToolkit -configuration Debug \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO build
       - name: Verify and boot an installed simulator runtime
         timeout-minutes: 15
