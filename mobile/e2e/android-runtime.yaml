@@ -6,6 +6,7 @@ appId: au.fintex.officetoolkit
 - launchApp:
     clearState: true
 - assertVisible: "Sign in"
+- takeScreenshot: sign-in-screen
 - tapOn: "Sign in"
 - extendedWaitUntil:
     visible: "Email or username"
@@ -19,5 +20,7 @@ appId: au.fintex.officetoolkit
     visible: "PDF to JPEG"
     timeout: 60000
 - assertVisible: "PDF to JPEG"
+- takeScreenshot: operation-screen
 - tapOn: "PDF to JPEG"
 - assertVisible: "Choose file and run"
+- takeScreenshot: operation-ready

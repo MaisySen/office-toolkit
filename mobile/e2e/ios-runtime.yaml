@@ -7,6 +7,7 @@ appId: au.fintex.officetoolkit
 - launchApp:
     clearState: true
 - assertVisible: "Sign in"
+- takeScreenshot: sign-in-screen
 - tapOn: "Sign in"
 # iOS may show the "Wants to Use localhost to Sign In" consent sheet
 # before the auth session; skipped entirely when absent.
@@ -29,5 +30,7 @@ appId: au.fintex.officetoolkit
     visible: "PDF to JPEG"
     timeout: 60000
 - assertVisible: "PDF to JPEG"
+- takeScreenshot: operation-screen
 - tapOn: "PDF to JPEG"
 - assertVisible: "Choose file and run"
+- takeScreenshot: operation-ready

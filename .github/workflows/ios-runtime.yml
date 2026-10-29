@@ -129,7 +129,8 @@ jobs:
         timeout-minutes: 15
         run: maestro test mobile/e2e/ios-runtime.yaml
       - uses: actions/upload-artifact@v4
-        if: failure()
+        # always: a green run must also ship its screenshots as proof.
+        if: always()
         with:
-          name: ios-runtime-failure-state
+          name: ios-runtime-state
           path: ~/.maestro/tests

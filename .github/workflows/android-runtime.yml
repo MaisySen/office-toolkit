@@ -192,7 +192,8 @@ jobs:
           "$ANDROID_HOME/platform-tools/adb" install -r /tmp/apk/app-debug.apk
           maestro test mobile/e2e/android-runtime.yaml
       - uses: actions/upload-artifact@v4
-        if: failure()
+        # always: a green run must also ship its screenshots as proof.
+        if: always()
         with:
-          name: android-runtime-failure-state
+          name: android-runtime-state
           path: ~/.maestro/tests
