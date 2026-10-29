@@ -88,6 +88,32 @@ def mailpit_latest_link(timeout_s=60):
     fail("no mail for the journey user arrived")
 
 
+def complete_action_link(link, password, new_password=None):
+    """Complete a Keycloak action-token link: it shows the login form first
+    (action executes after authentication), then possibly a password form."""
+    s = requests.Session()
+    r = s.get(link)
+    for step in range(4):
+        action = form_action(r.text)
+        if action is None:
+            break
+        if 'name="username"' in r.text:
+            r = s.post(action, data={"username": EMAIL, "password": password})
+        elif 'name="password-confirm"' in r.text:
+            if new_password is None:
+                break
+            r = s.post(action, data={"password": new_password,
+                                     "password-confirm": new_password})
+        else:
+            break
+        snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
+        if "account has been updated" in snip.lower():
+            return True
+    snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
+    print("action-link end state:", snip[:200])
+    return "account has been updated" in snip.lower()
+
+
 def login_via_toolkit(s, password):
     """Drive /login/oidc -> Keycloak login form -> toolkit callback."""
     r = s.get(f"{APP}/login/oidc", allow_redirects=False)
@@ -129,12 +155,8 @@ def registration_journey(auth):
         fail(f"send verify email: {r.status_code} {r.text[:200]}")
     link, subject = mailpit_latest_link()
     print("captured mail:", subject)
-    print("verify link:", link[:110])
-    r = requests.get(link)
-    print("verify GET:", r.status_code)
-    snip = re.sub(r"<[^>]+>", " ", r.text)
-    snip = re.sub(r"\s+", " ", snip).strip()
-    print("verify page:", snip[:300])
+    if not complete_action_link(link, PASSWORD):
+        fail("verify-email action link did not complete")
     status = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
                           headers=auth).json()
     if not status.get("emailVerified"):
@@ -153,16 +175,8 @@ def reset_journey(auth):
         fail(f"send reset email: {r.status_code} {r.text[:200]}")
     link, subject = mailpit_latest_link()
     print("captured mail:", subject)
-    s = requests.Session()
-    r = s.get(link)
-    action = form_action(r.text)
-    if action is None:
-        print(r.text[:1200])
-        fail("no form on the update-password page")
-    r = s.post(action, data={"password": NEW_PASSWORD,
-                             "password-confirm": NEW_PASSWORD},
-               allow_redirects=False)
-    print("password reset form accepted:", r.status_code)
+    if not complete_action_link(link, PASSWORD, new_password=NEW_PASSWORD):
+        fail("update-password action link did not complete")
     s2 = requests.Session()
     login_via_toolkit(s2, NEW_PASSWORD)
     print("password reset journey OK")
