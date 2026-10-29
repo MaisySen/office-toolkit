@@ -141,10 +141,15 @@ def remove_password(src: str, out: str, password: str) -> None:
 
     Never attempts to crack; a wrong password raises ToolkitError.
     """
+    password_error = getattr(pikepdf, "PasswordError", None)
     try:
         pdf = pikepdf.open(src, password=password)
-    except pikepdf.PasswordError:
-        raise ToolkitError("Wrong password. The file was not changed.")
+    except Exception as e:
+        is_password = (password_error is not None and isinstance(e, password_error)) \
+            or "password" in str(e).lower()
+        if is_password:
+            raise ToolkitError("Wrong password. The file was not changed.")
+        raise
     with pdf:
         pdf.save(out)
 
