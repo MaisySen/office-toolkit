@@ -1,5 +1,5 @@
 // Client for the office toolkit backend JSON API.
-// The base URL comes from app.json extra.apiBaseUrl; auth token support is
+// The base URL comes from app.json extra.apiBaseUrl (overridable per build via app.config.js env); auth token support is
 // wired but empty until the auth stack decision lands (OAuth2 + PKCE).
 
 import * as SecureStore from "expo-secure-store";
