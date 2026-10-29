@@ -1,0 +1,80 @@
+name: ios-runtime
+on: [push]
+jobs:
+  runtime:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the toolkit's Python dependencies
+        run: pip install -r requirements.txt
+      - name: Download Keycloak and Mailpit
+        run: |
+          curl -sL -o /tmp/kc.tar.gz \
+            https://github.com/keycloak/keycloak/releases/download/26.8.1/keycloak-26.8.1.tar.gz
+          tar -xzf /tmp/kc.tar.gz -C /tmp
+          curl -sL -o /tmp/mailpit.zip \
+            https://github.com/axllent/mailpit/releases/latest/download/mailpit-darwin-arm64.zip
+          unzip -q -o /tmp/mailpit.zip -d /tmp mailpit
+      - name: Start Keycloak, Mailpit and the toolkit app
+        run: |
+          /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 > /tmp/kc.log 2>&1 &
+          /tmp/mailpit --listen 127.0.0.1:8025 --smtp-listen 127.0.0.1:1025 > /tmp/mailpit.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8080/realms/master >/dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:8080/realms/master >/dev/null \
+            || { tail -40 /tmp/kc.log; exit 1; }
+          python3 scripts/ci_runtime_stack.py
+      - name: Install JS dependencies
+        working-directory: mobile
+        run: npm ci
+      - name: Build the app for the simulator
+        working-directory: mobile
+        env:
+          CI: 1
+        run: |
+          npx expo prebuild --platform ios --non-interactive --no-install --clean
+          npx pod-install ios --non-interactive
+          cd ios
+          xcodebuild -workspace OfficeToolkit.xcworkspace \
+            -scheme OfficeToolkit -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
+      - name: Verify and boot an installed simulator runtime
+        run: |
+          xcrun simctl list runtimes
+          RUNTIME=$(xcrun simctl list runtimes -j \
+            | jq -r '[.runtimes[] | select(.platform=="iOS" and .isAvailable)] | last | .identifier')
+          test -n "$RUNTIME" && test "$RUNTIME" != null \
+            || { echo "no usable iOS simulator runtime installed"; exit 1; }
+          TYPE=$(xcrun simctl list devicetypes -j \
+            | jq -r '[.devicetypes[] | select(.name | test("^iPhone 1[5-9]"))] | last | .identifier')
+          UDID=$(xcrun simctl create ci-iphone "$TYPE" "$RUNTIME")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install booted \
+            mobile/ios/build/Build/Products/Debug-iphonesimulator/OfficeToolkit.app
+      - name: Install Maestro
+        run: |
+          curl -sL -o /tmp/maestro.zip \
+            https://github.com/mobile-dev-inc/maestro/releases/latest/download/maestro.zip
+          unzip -q -o /tmp/maestro.zip -d /tmp
+          MAESTRO_DIR=$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)
+          echo "$MAESTRO_DIR/bin" >> "$GITHUB_PATH"
+      - name: Drive sign-in and the operation screen
+        run: maestro test mobile/e2e/ios-runtime.yaml
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-runtime-failure-state
+          path: ~/.maestro/tests

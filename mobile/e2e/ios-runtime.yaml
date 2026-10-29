@@ -1,0 +1,33 @@
+appId: au.fintex.officetoolkit
+---
+# Real sign-in against the live Keycloak on the runner, then the
+# authenticated operation screen. The system file picker leg is added
+# once its seeding route is proven; the API-level operation proof lives
+# in the Keycloak journey.
+- launchApp:
+    clearState: true
+- assertVisible: "Sign in"
+- tapOn: "Sign in"
+# iOS may show the "Wants to Use localhost to Sign In" consent sheet
+# before the auth session; skipped entirely when absent.
+- runFlow:
+    when:
+      visible: "Continue"
+    commands:
+      - tapOn: "Continue"
+- extendedWaitUntil:
+    visible: "Email or username"
+    timeout: 30000
+- tapOn: "Email or username"
+- inputText: "runtime.user@example.com"
+- tapOn: "Password"
+- inputText: "runtime-pass-123"
+- tapOn: "Sign In"
+# Back in the app, the authenticated operation list comes from the live
+# API over the bearer token the session just minted.
+- extendedWaitUntil:
+    visible: "PDF to JPEG"
+    timeout: 60000
+- assertVisible: "PDF to JPEG"
+- tapOn: "PDF to JPEG"
+- assertVisible: "Choose file and run"
