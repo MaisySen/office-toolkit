@@ -211,7 +211,10 @@ jobs:
           tag.display=Google APIs
           tag.id=google_apis
           CFGEOF
-          "$ANDROID_HOME/emulator/emulator" -avd ci -no-window \
+          # /dev/kvm exists but the runner user is not in the kvm group;
+          # a group change needs a new login, so open the device instead.
+          test -w /dev/kvm || sudo chmod 666 /dev/kvm
+          "$ANDROID_HOME/emulator/emulator" -avd ci -no-window -no-metrics \
             -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim &
           timeout 420 "$ANDROID_HOME/platform-tools/adb" wait-for-device \
             || { echo 'emulator never appeared on adb'; exit 1; }
