@@ -62,7 +62,9 @@ def setup_realm(auth):
 
 
 def form_action(html, base=KC):
-    m = re.search(r'<form[^>]+action="([^"]+)"', html)
+    m = re.search(r"<form[^>]+action=[\']([^\']+)[\']", html)
+    if not m:
+        m = re.search(r'<form[^>]+action="([^"]+)"', html)
     if not m:
         return None
     return urllib.parse.urljoin(base, m.group(1).replace("&amp;", "&"))
@@ -95,6 +97,10 @@ def registration_journey(auth):
         fail("no registration link on the Keycloak login page")
     r = s.get(urllib.parse.urljoin(KC, reg.group(1).replace("&amp;", "&")))
     action = form_action(r.text)
+    if action is None:
+        print("registration page status:", r.status_code, r.url)
+        print(r.text[:1500])
+        fail("no form on the registration page")
     r = s.post(action, data={
         "email": EMAIL, "firstName": "Journey", "lastName": "Test",
         "password": PASSWORD, "password-confirm": PASSWORD})
