@@ -115,10 +115,16 @@ def complete_action_link(link, password, new_password=None):
     s = requests.Session()
     r = s.get(link)
     print("GET link ->", page_state(r))
-    for step in range(4):
+    for step in range(6):
         action = form_action(r.text)
         if action is None:
-            print(f"step {step}: no form on page")
+            m = re.search(r'href="([^"]*login-actions[^"]*)"', r.text)
+            if m:
+                u = urllib.parse.urljoin(KC, m.group(1).replace("&amp;", "&"))
+                r = s.get(u)
+                print(f"step {step} proceed ->", page_state(r))
+                continue
+            print(f"step {step}: no form, no proceed link")
             break
         if 'name="username"' in r.text:
             r = s.post(action, data={"username": EMAIL, "password": password})
@@ -176,7 +182,8 @@ def registration_journey(auth):
                        data={"grant_type": "password",
                              "client_id": "office-toolkit-mobile",
                              "username": EMAIL, "password": PASSWORD})
-    dg_err = (dg.json().get("error", "token-ok")
+    dg_err = ((dg.json().get("error", "token-ok") + " / "
+               + dg.json().get("error_description", ""))
               if dg.headers.get("content-type", "").startswith("application/json")
               else dg.text[:120])
     print("direct-grant credential check:", dg.status_code, dg_err)
