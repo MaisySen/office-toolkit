@@ -52,7 +52,9 @@ def setup_realm(auth):
         body = {"clientId": cid, "enabled": True, "publicClient": public,
                 "standardFlowEnabled": True, "redirectUris": redirects,
                 "attributes": {"pkce.code.challenge.method": "S256"}}
-        if not public:
+        if public:
+            body["directAccessGrantsEnabled"] = True
+        else:
             body["secret"] = "ci-web-secret"
         r = requests.post(f"{KC}/admin/realms/{REALM}/clients",
                           headers=auth, json=body)
@@ -88,14 +90,34 @@ def mailpit_latest_link(timeout_s=60):
     fail("no mail for the journey user arrived")
 
 
+def clean_text(html, limit=300):
+    t = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"\s+", " ", t).strip()[:limit]
+
+
+def page_state(r):
+    uname = 'name="username"' in r.text
+    pwc = 'name="password-confirm"' in r.text
+    return (f"status={r.status_code} url={r.url[:110]} "
+            f"hist={[h.status_code for h in r.history]} "
+            f"cookies={sorted(r.cookies.keys())} "
+            f"username_form={uname} pw_confirm={pwc} "
+            f"text={clean_text(r.text)!r}")
+
+
 def complete_action_link(link, password, new_password=None):
     """Complete a Keycloak action-token link: it shows the login form first
-    (action executes after authentication), then possibly a password form."""
+    (action executes after authentication), then possibly a password form.
+    Logs full request and response evidence at every step."""
+    print("action link:", link[:70] + "..." + link[-8:])
     s = requests.Session()
     r = s.get(link)
+    print("GET link ->", page_state(r))
     for step in range(4):
         action = form_action(r.text)
         if action is None:
+            print(f"step {step}: no form on page")
             break
         if 'name="username"' in r.text:
             r = s.post(action, data={"username": EMAIL, "password": password})
@@ -105,17 +127,12 @@ def complete_action_link(link, password, new_password=None):
             r = s.post(action, data={"password": new_password,
                                      "password-confirm": new_password})
         else:
+            print(f"step {step}: form has neither username nor password-confirm")
             break
-        low = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).lower()
-        print(f"action step {step}: status={r.status_code} url={r.url[:90]}",
-              "| updated" if "account has been updated" in low else "",
-              "| invalid-creds" if "invalid username or password" in low else "",
-              "| expired" if "timed out" in low or "expired" in low else "",
-              "| cookie-missing" if "cookie not found" in low else "")
-        if "account has been updated" in low:
+        print(f"step {step} post ->", page_state(r))
+        if "account has been updated" in clean_text(r.text, 2000).lower():
             return True
-    low = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).lower()
-    return "account has been updated" in low
+    return "account has been updated" in clean_text(r.text, 2000).lower()
 
 
 def login_via_toolkit(s, password):
@@ -153,6 +170,14 @@ def registration_journey(auth):
         fail(f"user create: {r.status_code} {r.text[:200]}")
     uid = requests.get(f"{KC}/admin/realms/{REALM}/users",
                        headers=auth, params={"email": EMAIL}).json()[0]["id"]
+    dg = requests.post(f"{KC}/realms/{REALM}/protocol/openid-connect/token",
+                       data={"grant_type": "password",
+                             "client_id": "office-toolkit-mobile",
+                             "username": EMAIL, "password": PASSWORD})
+    dg_err = (dg.json().get("error", "token-ok")
+              if dg.headers.get("content-type", "").startswith("application/json")
+              else dg.text[:120])
+    print("direct-grant credential check:", dg.status_code, dg_err)
     r = requests.put(f"{KC}/admin/realms/{REALM}/users/{uid}/execute-actions-email",
                      headers=auth, json=["VERIFY_EMAIL"])
     if r.status_code not in (200, 204):
@@ -160,6 +185,11 @@ def registration_journey(auth):
     link, subject = mailpit_latest_link()
     print("captured mail:", subject)
     if not complete_action_link(link, PASSWORD):
+        st = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
+                          headers=auth).json()
+        print("user state on failure:", json.dumps(
+            {k: st.get(k) for k in ("enabled", "emailVerified",
+                                    "requiredActions")}))
         fail("verify-email action link did not complete")
     status = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
                           headers=auth).json()
