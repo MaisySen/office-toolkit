@@ -176,12 +176,20 @@ jobs:
             grep -iE " ERROR |Warning: " /tmp/metro.log | tail -40 || true
             echo '--- kc.log token lines ---'
             grep -iE "TokenEndpoint|invalid|error" /tmp/kc.log | tail -20 || true
+            # Whatever is actually on the simulator at failure time
+            # (Safari error page, app error text) is decisive evidence.
+            xcrun simctl io booted screenshot /tmp/ios-failure.png 2>/dev/null || true
           fi
           find "$HOME/.maestro/tests" -name '*.png' 2>/dev/null | sort | while read -r SHOT; do
             echo "---SHOT-BEGIN $(basename "$SHOT")---"
             base64 -i "$SHOT"
             echo "---SHOT-END---"
           done
+          if [ -f /tmp/ios-failure.png ]; then
+            echo '---SHOT-BEGIN simulator-failure.png---'
+            base64 -i /tmp/ios-failure.png
+            echo '---SHOT-END---'
+          fi
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
         if: always()

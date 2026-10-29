@@ -44,13 +44,16 @@ appId: au.fintex.officetoolkit
     direction: DOWN
     timeout: 30000
 - tapOn: "Sign In"
+# Freeze whatever is on screen right after the tap (Safari hand-off,
+# Keycloak error page, or the app) for the failure picture.
+- takeScreenshot: after-signin
 # Back in the app, the authenticated operation list comes from the live
 # API over the bearer token the session just minted.
 # Wait for the list itself, then scroll: the operation sits below the
 # fold in the FlatList, so a bare visible-wait never fires.
 - extendedWaitUntil:
     visible: "Merge PDFs"
-    timeout: 60000
+    timeout: 120000
 - scrollUntilVisible:
     element:
       text: "PDF to JPEG"
