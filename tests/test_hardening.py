@@ -117,3 +117,66 @@ def test_index_signs_out_with_a_form(signed_in):
     html = c.get("/").get_data(as_text=True)
     assert 'href="/logout"' not in html
     assert 'action="/logout"' in html
+
+
+# ----------------------------------------------- 3. bounded JWKS fetching
+
+class _FakeResp:
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+@pytest.fixture
+def jwks_counter(monkeypatch):
+    import requests
+    from office_toolkit.web import app as webapp
+    webapp._JWKS_CACHE.clear()
+    calls = []
+
+    def fake_get(url, timeout=None, **kw):
+        calls.append(url)
+        return _FakeResp({"keys": [{"kty": "RSA", "kid": "known",
+                                    "n": "AQAB", "e": "AQAB"}]})
+    monkeypatch.setattr(requests, "get", fake_get)
+    yield webapp, calls
+    webapp._JWKS_CACHE.clear()
+
+
+def _b64(obj):
+    raw = json.dumps(obj).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+@pytest.mark.parametrize("garbage", [
+    "", "x", "a.b", "a.b.c.d", "....", "not a token at all",
+    "%%%.%%%.%%%", "a" * 20000,
+    _b64({"alg": "none"}) + ".e30.sig",
+    _b64({"alg": "HS256", "kid": "known"}) + ".e30.sig",
+    _b64({"alg": "RS256", "kid": 7}) + ".e30.sig",
+    _b64({"alg": "RS256", "kid": "k" * 300}) + ".e30.sig",
+    _b64(["RS256"]) + ".e30.sig",
+])
+def test_garbage_tokens_never_fetch_the_jwks(jwks_counter, garbage):
+    webapp, calls = jwks_counter
+    assert webapp._decode_idp_token(garbage, "https://idp.test/jwks") is None
+    assert calls == []
+
+
+def test_unknown_kid_flood_refetches_at_most_once(jwks_counter):
+    webapp, calls = jwks_counter
+    for i in range(50):
+        token = _b64({"alg": "RS256", "kid": f"random-{i}"}) + ".e30.c2ln"
+        assert webapp._decode_idp_token(token, "https://idp.test/jwks") is None
+    # one normal fetch plus one rate limited forced refetch
+    assert len(calls) == 2
+
+
+def test_bad_signature_on_known_kid_does_not_refetch(jwks_counter):
+    webapp, calls = jwks_counter
+    for _ in range(20):
+        token = _b64({"alg": "RS256", "kid": "known"}) + ".e30.c2ln"
+        assert webapp._decode_idp_token(token, "https://idp.test/jwks") is None
+    assert len(calls) == 1

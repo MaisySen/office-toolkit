@@ -208,37 +208,105 @@ def current_user_id():
 
 
 # Bearer tokens minted by the configured IdP (mobile public clients use
-# PKCE directly against it). JWKS responses are cached per jwks_uri.
-_JWKS_CACHE: dict[str, tuple[dict, float]] = {}
+# PKCE directly against it). JWKS responses are cached per jwks_uri as
+# (jwks, fetched_at, last_forced_refetch_at).
+_JWKS_CACHE: dict[str, tuple[dict, float, float]] = {}
 _JWKS_TTL = 300.0
+# A token naming a key the cache does not hold may mean the provider
+# rotated keys, so the JWKS is refetched, but at most once per this many
+# seconds per provider: a flood of garbage tokens cannot turn into a
+# flood of JWKS requests.
+_JWKS_FORCED_REFETCH_INTERVAL = 60.0
+# Larger than any real access token; anything bigger is rejected before
+# parsing.
+_MAX_BEARER_LENGTH = 8192
+_ALLOWED_JWT_ALGS = ("RS256",)
 EXPECTED_AUDIENCE = os.environ.get("TOOLKIT_OIDC_AUDIENCE", "office-toolkit-api")
 
 
-def _jwks(jwks_uri: str):
-    """Return the cached JWKS for jwks_uri, fetching on miss or staleness.
-    A failed fetch raises; callers treat that as unverifiable."""
+def _jwks(jwks_uri: str, force: bool = False):
+    """Return the cached JWKS for jwks_uri, fetching on miss, staleness or
+    an allowed forced refetch. A failed fetch raises; callers treat that
+    as unverifiable."""
     import requests as _requests
     cached = _JWKS_CACHE.get(jwks_uri)
-    if cached is None or time.time() - cached[1] > _JWKS_TTL:
-        cached = (_requests.get(jwks_uri, timeout=5).json(), time.time())
-        _JWKS_CACHE[jwks_uri] = cached
-    return cached[0]
+    now = time.time()
+    last_forced = cached[2] if cached else 0.0
+    if force:
+        if now - last_forced < _JWKS_FORCED_REFETCH_INTERVAL:
+            return cached[0] if cached else None
+        last_forced = now
+    elif cached is not None and now - cached[1] <= _JWKS_TTL:
+        return cached[0]
+    jwks = _requests.get(jwks_uri, timeout=5).json()
+    if not isinstance(jwks, dict):
+        raise ValueError("JWKS is not a JSON object")
+    _JWKS_CACHE[jwks_uri] = (jwks, now, last_forced)
+    return jwks
+
+
+def _jwt_header(token: str) -> dict | None:
+    """Cheap structural screen run before any key lookup or network call:
+    three non-empty base64url segments, a bounded length, a JSON header
+    naming an allowed algorithm and, if present, a short string kid.
+    Anything else is not a token this API could ever accept."""
+    import base64
+    import json
+    import re
+    if not token or len(token) > _MAX_BEARER_LENGTH:
+        return None
+    parts = token.split(".")
+    if len(parts) != 3 or not all(
+            re.fullmatch(r"[A-Za-z0-9_-]+", p) for p in parts):
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(parts[0] + "=" * (-len(parts[0]) % 4))
+        header = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(header, dict) or header.get("alg") not in _ALLOWED_JWT_ALGS:
+        return None
+    kid = header.get("kid")
+    if kid is not None and (not isinstance(kid, str) or not kid or len(kid) > 256):
+        return None
+    return header
+
+
+def _jwks_has_kid(jwks, kid: str) -> bool:
+    keys = jwks.get("keys") if isinstance(jwks, dict) else None
+    return isinstance(keys, list) and any(
+        isinstance(k, dict) and k.get("kid") == kid for k in keys)
 
 
 def _decode_idp_token(token: str, jwks_uri: str):
-    """Decode a JWT against the provider JWKS. On any decode failure the
-    cache is busted and the JWKS refetched once, so a key rotation does
-    not reject fresh tokens; a second failure means unverifiable."""
+    """Decode a JWT against the provider JWKS. Malformed input is rejected
+    without touching the network. A kid the cached JWKS lacks (or a
+    kid-less token that fails to verify) may mean a key rotation, so the
+    JWKS is refetched, rate limited per provider; a token whose kid the
+    cache holds but whose signature fails is simply unverifiable."""
     from authlib.jose import JsonWebToken
-    jwt = JsonWebToken(["RS256"])
+    header = _jwt_header(token)
+    if header is None:
+        return None
+    jwt = JsonWebToken(list(_ALLOWED_JWT_ALGS))
+    kid = header.get("kid")
     try:
-        return jwt.decode(token, _jwks(jwks_uri))
-    except Exception:
-        _JWKS_CACHE.pop(jwks_uri, None)
+        jwks = _jwks(jwks_uri)
+        if kid is not None and not _jwks_has_kid(jwks, kid):
+            jwks = _jwks(jwks_uri, force=True)
+            if not _jwks_has_kid(jwks, kid):
+                return None
         try:
-            return jwt.decode(token, _jwks(jwks_uri))
+            return jwt.decode(token, jwks)
         except Exception:
-            return None
+            if kid is not None:
+                return None
+            refreshed = _jwks(jwks_uri, force=True)
+            if refreshed is jwks:
+                return None
+            return jwt.decode(token, refreshed)
+    except Exception:
+        return None
 
 
 def _configured_issuer() -> str:
