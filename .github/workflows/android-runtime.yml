@@ -1,16 +1,17 @@
-# PARKED - manual trigger only until the owner approves the standard
-# Android SDK License Agreement (https://developer.android.com/studio/terms)
-# for five stable-channel components. Permission is enforced BEFORE any
-# acceptance: scripts/ci_android_license.py validates Google's live
+# The owner approved the standard Android SDK License Agreement as
+# served by the SDK installer (repository metadata text, sha1
+# a90c249c9e874a0ca1854dd16aa9827dec1430da) on 2026-10-29, scoped to the
+# five stable-channel components below for CI test setup only - no
+# preview, legacy or other licenses. Permission is still enforced BEFORE
+# any acceptance: scripts/ci_android_license.py validates Google's live
 # repository metadata (all five components stable-channel, carrying only
 # android-sdk-license) and requires the license text hash to equal the
-# approved pin recorded in that script; any drift refuses the job before
-# sdkmanager runs. The install then seeds only the approved license file
-# and runs with stdin closed, so an unexpected prompt fails the job
-# instead of ever being accepted. The blanket `--licenses` command is
-# never invoked.
+# approved pin; any drift refuses the job before sdkmanager runs. The
+# install seeds only the approved license file and runs with stdin
+# closed, so an unexpected prompt fails the job instead of ever being
+# accepted. The blanket `--licenses` command is never invoked.
 name: android-runtime
-on: workflow_dispatch
+on: [push, workflow_dispatch]
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -63,13 +64,13 @@ jobs:
         run: pip install -r requirements.txt
       - name: Download Keycloak, Mailpit and Maestro
         run: |
-          curl -sL -o /tmp/kc.tar.gz \
+          curl -sfL -o /tmp/kc.tar.gz \
             https://github.com/keycloak/keycloak/releases/download/26.8.1/keycloak-26.8.1.tar.gz
           tar -xzf /tmp/kc.tar.gz -C /tmp
-          curl -sL -o /tmp/mailpit.zip \
-            https://github.com/axllent/mailpit/releases/latest/download/mailpit-linux-amd64.zip
-          unzip -q -o /tmp/mailpit.zip -d /tmp mailpit
-          curl -sL -o /tmp/maestro.zip \
+          curl -sfL -o /tmp/mailpit.tar.gz \
+            https://github.com/axllent/mailpit/releases/latest/download/mailpit-linux-amd64.tar.gz
+          tar -xzf /tmp/mailpit.tar.gz -C /tmp mailpit
+          curl -sfL -o /tmp/maestro.zip \
             https://github.com/mobile-dev-inc/maestro/releases/latest/download/maestro.zip
           unzip -q -o /tmp/maestro.zip -d /tmp
           echo "$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)/bin" >> "$GITHUB_PATH"

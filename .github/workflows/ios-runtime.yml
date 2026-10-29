@@ -18,12 +18,12 @@ jobs:
         run: pip install -r requirements.txt
       - name: Download Keycloak and Mailpit
         run: |
-          curl -sL -o /tmp/kc.tar.gz \
+          curl -sfL -o /tmp/kc.tar.gz \
             https://github.com/keycloak/keycloak/releases/download/26.8.1/keycloak-26.8.1.tar.gz
           tar -xzf /tmp/kc.tar.gz -C /tmp
-          curl -sL -o /tmp/mailpit.zip \
-            https://github.com/axllent/mailpit/releases/latest/download/mailpit-darwin-arm64.zip
-          unzip -q -o /tmp/mailpit.zip -d /tmp mailpit
+          curl -sfL -o /tmp/mailpit.tar.gz \
+            https://github.com/axllent/mailpit/releases/latest/download/mailpit-darwin-arm64.tar.gz
+          tar -xzf /tmp/mailpit.tar.gz -C /tmp mailpit
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
           /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 > /tmp/kc.log 2>&1 &
@@ -66,7 +66,7 @@ jobs:
             mobile/ios/build/Build/Products/Debug-iphonesimulator/OfficeToolkit.app
       - name: Install Maestro
         run: |
-          curl -sL -o /tmp/maestro.zip \
+          curl -sfL -o /tmp/maestro.zip \
             https://github.com/mobile-dev-inc/maestro/releases/latest/download/maestro.zip
           unzip -q -o /tmp/maestro.zip -d /tmp
           MAESTRO_DIR=$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)
