@@ -24,6 +24,10 @@ from office_toolkit.pdfops import ToolkitError
 ACCESS_TTL = 3600            # 1 hour
 REFRESH_TTL = 30 * 86400     # 30 days
 CODE_TTL = 600               # 10 minutes, single use
+# Absolute web session age: a session cookie stops working this long after
+# sign-in however active it is, and expired rows are purged from the store.
+WEB_SESSION_MAX_AGE = int(os.environ.get("TOOLKIT_SESSION_MAX_AGE",
+                                         str(12 * 3600)))  # 12 hours
 
 ph = PasswordHasher()  # argon2id, library defaults
 
@@ -292,6 +296,7 @@ class AuthStore:
 
 
     def create_web_session(self, user_id: int) -> str:
+        self.purge_expired_sessions()
         sid = secrets.token_urlsafe(24)
         self.db.execute("INSERT INTO web_sessions (sid, user_id, created_at) "
                         "VALUES (?,?,?)", (sid, user_id, time.time()))
@@ -301,9 +306,29 @@ class AuthStore:
     def web_session_user(self, sid: str | None) -> int | None:
         if not sid:
             return None
-        row = self.db.execute("SELECT user_id FROM web_sessions WHERE sid=?",
-                              (sid,)).fetchone()
-        return row["user_id"] if row else None
+        row = self.db.execute("SELECT user_id, created_at FROM web_sessions "
+                              "WHERE sid=?", (sid,)).fetchone()
+        if not row:
+            return None
+        if row["created_at"] + WEB_SESSION_MAX_AGE <= time.time():
+            # Past its absolute age: the cookie no longer signs anyone in
+            # and the row goes, whatever the cookie itself still claims.
+            self.drop_web_session(sid)
+            return None
+        return row["user_id"]
+
+    def purge_expired_sessions(self) -> int:
+        """Delete web sessions past their absolute age, plus expired auth
+        codes, tokens and OIDC states, so the store does not grow without
+        bound. Runs on every new sign-in; returns the sessions removed."""
+        now = time.time()
+        cur = self.db.execute("DELETE FROM web_sessions WHERE created_at<=?",
+                              (now - WEB_SESSION_MAX_AGE,))
+        self.db.execute("DELETE FROM auth_codes WHERE expires_at<?", (now,))
+        self.db.execute("DELETE FROM tokens WHERE expires_at<?", (now,))
+        self.db.execute("DELETE FROM oidc_states WHERE expires_at<?", (now,))
+        self.db.commit()
+        return cur.rowcount
 
     def drop_web_session(self, sid: str | None) -> None:
         if sid:
