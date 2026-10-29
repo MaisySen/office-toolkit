@@ -8,20 +8,16 @@ appId: au.fintex.officetoolkit
 - assertVisible: "Sign in"
 - takeScreenshot: sign-in-screen
 - tapOn: "Sign in"
-# A fresh emulator lands on Chrome's first-run welcome the first time
-# the auth session hands Chrome the login URL (google_apis user builds
-# ignore the chrome-command-line flag file). Dismiss it, drop back to
-# the app, and re-trigger sign-in; absent on any warmed emulator.
-- runFlow:
-    when:
-      visible: "Use without an account"
-    commands:
-      - tapOn: "Use without an account"
-      - back
-      - tapOn: "Sign in"
+# A cold emulator can route the first custom-tab hand-off through
+# Chrome's first-run welcome; the optional tap waits out Maestro's 7s
+# optional lookup and skips cleanly once Chrome is warm, and Chrome
+# continues to the pending login URL after the dismissal.
+- tapOn:
+    text: "Use without an account"
+    optional: true
 - extendedWaitUntil:
     visible: "Username or email"
-    timeout: 30000
+    timeout: 45000
 - tapOn: "Username or email"
 - inputText: "runtime.user@example.com"
 - tapOn: "Password"

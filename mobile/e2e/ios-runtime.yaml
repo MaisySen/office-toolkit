@@ -9,13 +9,13 @@ appId: au.fintex.officetoolkit
 - assertVisible: "Sign in"
 - takeScreenshot: sign-in-screen
 - tapOn: "Sign in"
-# iOS may show the "Wants to Use localhost to Sign In" consent sheet
-# before the auth session; skipped entirely when absent.
-- runFlow:
-    when:
-      visible: "Continue"
-    commands:
-      - tapOn: "Continue"
+# iOS shows the "Wants to Use localhost to Sign In" consent sheet on
+# every fresh-install auth prompt; the conditional check raced the
+# sheet before, so wait for it deterministically.
+- extendedWaitUntil:
+    visible: "Continue"
+    timeout: 20000
+- tapOn: "Continue"
 - extendedWaitUntil:
     visible: "Username or email"
     timeout: 30000

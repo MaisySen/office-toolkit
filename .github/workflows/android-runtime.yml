@@ -163,6 +163,13 @@ jobs:
         run: |
           # react-native 0.76's cli.js is a deprecation shim without the
           # start command; the Expo CLI owns Metro in this project.
+          # The debug app takes Constants.expoConfig from the manifest
+          # Metro serves, and Metro evaluates app.config.js with ITS own
+          # environment - without these the app falls back to app.json's
+          # localhost issuer and the auth tab opens localhost:8080, which
+          # the emulator cannot reach (evidenced: ERR_CONNECTION_REFUSED).
+          TOOLKIT_OIDC_ISSUER=http://10.0.2.2:8080/realms/office-toolkit \
+          TOOLKIT_API_BASE_URL=http://10.0.2.2:5000 \
           nohup npx expo start --host lan --port 8081 \
             > /tmp/metro.log 2>&1 &
           for i in $(seq 1 45); do
