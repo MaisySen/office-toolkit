@@ -92,9 +92,13 @@ def mailpit_latest_link(to_addr, timeout_s=60):
 
 
 def page_summary(page):
-    path = urllib.parse.urlsplit(page.url).path
+    sp = urllib.parse.urlsplit(page.url)
+    q = urllib.parse.parse_qs(sp.query)
+    err = ""
+    if "error" in q:
+        err = f" error={q.get('error')} desc={q.get('error_description')}"
     text = re.sub(r"\s+", " ", page.inner_text("body")).strip()[:200]
-    return f"path={path} title={page.title()!r} text={text!r}"
+    return f"path={sp.path}{err} title={page.title()!r} text={text!r}"
 
 
 def browser_action_link(page, link, username, password, new_password=None):
@@ -206,11 +210,16 @@ def self_registration_journey(auth, ctx):
     params = {"response_type": "code", "client_id": "office-toolkit-web",
               "redirect_uri": APP + "/login/oidc/callback", "scope": "openid"}
     page = ctx.new_page()
-    # The registrations endpoint is where the login page's Register link
-    # points; navigating directly is the same surface without depending on
-    # theme link text.
-    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/registrations?"
+    # Open the KC login page and follow the Register link it renders: the
+    # href is KC's own registration URL with the parameters it accepts.
+    page.goto(f"{KC}/realms/{REALM}/protocol/openid-connect/auth?"
               + urllib.parse.urlencode(params))
+    page.wait_for_load_state("load")
+    print("login page:", page_summary(page))
+    reg = page.locator('a[href*="registrations"]')
+    if not reg.count():
+        fail("no registration link on the Keycloak login page")
+    reg.first.click()
     page.wait_for_load_state("load")
     print("registration form:", page_summary(page))
     page.fill('input[name="firstName"]', "Self")
