@@ -19,10 +19,10 @@ jobs:
             start-dev --hostname http://localhost:8080 --http-enabled true
           docker run -d --name mailpit --network host axllent/mailpit:latest
           for i in $(seq 1 60); do
-            curl -sf http://localhost:9000/health/ready >/dev/null && break
+            curl -sf http://localhost:8080/realms/master >/dev/null && break
             sleep 3
           done
-          curl -sf http://localhost:9000/health/ready || { docker logs keycloak 2>&1 | tail -40; exit 1; }
+          curl -sf http://localhost:8080/realms/master >/dev/null || { docker logs keycloak 2>&1 | tail -40; exit 1; }
           for i in $(seq 1 20); do
             curl -sf http://localhost:8025/api/v1/messages >/dev/null && break
             sleep 2
