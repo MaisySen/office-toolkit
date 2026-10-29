@@ -156,6 +156,19 @@ jobs:
             > /dev/null || { tail -40 /tmp/kc.log; exit 1; }
           curl -s --max-time 30 -o /dev/null -w 'authorize warm: %{http_code}\n' \
             'http://127.0.0.1:8080/realms/office-toolkit/protocol/openid-connect/auth?client_id=office-toolkit-mobile&redirect_uri=officetoolkit%3A%2F%2Fauth&response_type=code&scope=openid&code_challenge_method=S256&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'
+      - name: Seed the runtime sample into the Files app
+        # The document picker browses the On My iPhone provider
+        # storage; drop the sample into its shared container so the
+        # flow can pick it like a user would.
+        run: |
+          python3 -c "from reportlab.pdfgen import canvas; c = canvas.Canvas('/tmp/runtime-sample.pdf'); c.drawString(72, 720, 'runtime proof page'); c.save()"
+          DEV=$(xcrun simctl list devices -j | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(v['udid'] for r in d['devices'].values() for v in r if v['state']=='Booted'))")
+          STORE=$(find "$HOME/Library/Developer/CoreSimulator/Devices/$DEV/data/Containers/Shared/AppGroup" -maxdepth 2 -name 'File Provider Storage' -type d | head -1)
+          if [ -z "$STORE" ]; then
+            echo 'File Provider Storage container not found'; exit 1
+          fi
+          cp /tmp/runtime-sample.pdf "$STORE/runtime-sample.pdf"
+          ls -la "$STORE"
       - name: Drive sign-in and the operation screen
         timeout-minutes: 15
         env:
@@ -165,6 +178,56 @@ jobs:
           MAESTRO_DRIVER_STARTUP_TIMEOUT: '300000'
         id: flow
         run: maestro test mobile/e2e/ios-runtime.yaml
+      - name: Inspect the operation output file
+        # Decoupled from the flow outcome: a UI drive failure must not
+        # hide a completed output. Runs whenever the simulator is up;
+        # a missing file fails the step only when the flow itself
+        # succeeded (a real output fault), while a failed flow keeps
+        # its own failure status. The app writes the server result (a
+        # ZIP of JPEG pages) into its Documents directory; pull it,
+        # verify every page decodes and emit each page for visual
+        # inspection.
+        if: always()
+        run: |
+          APP_DATA=$(xcrun simctl get_app_container booted au.fintex.officetoolkit data 2>/dev/null || true)
+          if [ -z "$APP_DATA" ] || [ ! -d "$APP_DATA/Documents" ]; then
+            echo 'app container not reachable; nothing to inspect'
+            exit 0
+          fi
+          OUT=$(ls -t "$APP_DATA/Documents/" | grep -E '^pages-jpeg.*[.]zip$' | head -1 || true)
+          if [ -z "$OUT" ]; then
+            echo 'no pages-jpeg output found; Documents holds:'
+            ls "$APP_DATA/Documents/" || true
+            if [ "${{ steps.flow.outcome }}" = "success" ]; then
+              echo 'flow succeeded but produced no output file'
+              exit 1
+            fi
+            exit 0
+          fi
+          cp "$APP_DATA/Documents/$OUT" /tmp/op-output
+          python3 - <<'PYEOF'
+          import io, zipfile
+          from PIL import Image
+          data = open('/tmp/op-output', 'rb').read()
+          if data[:4] == b'PK\x03\x04':
+              z = zipfile.ZipFile(io.BytesIO(data))
+              pages = [n for n in z.namelist() if n.lower().endswith(('.jpg', '.jpeg'))]
+              assert pages, f'no JPEG pages in zip: {z.namelist()}'
+              for n in pages:
+                  d = z.read(n)
+                  assert d[:2] == b'\xff\xd8', f'{n} is not a JPEG'
+                  Image.open(io.BytesIO(d)).verify()
+              print(f'output OK: zip with {len(pages)} decodable JPEG page(s), {len(data)} bytes')
+              import base64, sys
+              for n in pages:
+                  sys.stdout.write(f'---PAGE-BEGIN {n}---\n')
+                  sys.stdout.write(base64.b64encode(z.read(n)).decode() + '\n')
+                  sys.stdout.write('---PAGE-END---\n')
+          else:
+              assert data[:2] == b'\xff\xd8', f'not a JPEG or ZIP: {data[:16]!r}'
+              Image.open(io.BytesIO(data)).verify()
+              print(f'output OK: {len(data)} bytes, decodable JPEG')
+          PYEOF
       - name: Capture Keycloak state on failure
         if: failure()
         run: |

@@ -64,3 +64,22 @@ appId: au.fintex.officetoolkit
 - tapOn: "PDF to JPEG"
 - assertVisible: "Choose file and run"
 - takeScreenshot: operation-ready
+- tapOn: "Choose file and run"
+# The system document picker opens on its browse root; the sample was
+# placed in the On My iPhone provider storage by the workflow.
+- extendedWaitUntil:
+    visible: "On My iPhone"
+    timeout: 30000
+- takeScreenshot: picker-open
+- tapOn: "On My iPhone"
+- extendedWaitUntil:
+    visible: "runtime-sample.pdf"
+    timeout: 15000
+- takeScreenshot: picker-files
+- tapOn: "runtime-sample.pdf"
+# The app runs the operation server-side, writes the result ZIP and
+# shows its own result line with a Share button.
+- extendedWaitUntil:
+    visible: "Done:"
+    timeout: 120000
+- takeScreenshot: operation-result
