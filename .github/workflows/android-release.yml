@@ -8,6 +8,13 @@ on:
 jobs:
   aab:
     runs-on: ubuntu-latest
+    # Job level so both prebuild and the Gradle bundle step (where
+    # expo-constants embeds the config) see the production endpoints;
+    # TOOLKIT_RELEASE_BUILD makes app.config.js refuse local or http ones.
+    env:
+      TOOLKIT_RELEASE_BUILD: "1"
+      TOOLKIT_OIDC_ISSUER: https://doctool.multies.si/auth/realms/office-toolkit
+      TOOLKIT_API_BASE_URL: https://doctool.multies.si
     defaults:
       run:
         working-directory: mobile
@@ -24,12 +31,12 @@ jobs:
           java-version: 17
       - name: Install JS dependencies
         run: npm ci
+      - name: Check the release endpoints before building
+        run: node -e 'const c = require("./app.config.js")(); console.log("release endpoints:", c.extra.apiBaseUrl, c.extra.oidcIssuer)'
       - name: Generate the native Android project
         run: npx expo prebuild --platform android --non-interactive --no-install --clean
         env:
           CI: 1
-          TOOLKIT_OIDC_ISSUER: https://doctool.multies.si/auth/realms/office-toolkit
-          TOOLKIT_API_BASE_URL: https://doctool.multies.si
       - name: Align Kotlin with the version React Native actually applies
         working-directory: mobile/android
         run: echo "android.kotlinVersion=1.9.24" >> gradle.properties

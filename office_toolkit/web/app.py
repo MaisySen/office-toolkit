@@ -44,10 +44,40 @@ AUTH_DB = os.environ.get("TOOLKIT_AUTH_DB",
 auth_store = AuthStore(AUTH_DB)
 REGISTRATION_OPEN = os.environ.get("TOOLKIT_REGISTRATION_OPEN", "") == "1"
 MOBILE_CLIENT_ID = os.environ.get("TOOLKIT_MOBILE_CLIENT_ID", "office-toolkit-mobile")
-auth_store.register_client(
-    MOBILE_CLIENT_ID,
-    [r for r in os.environ.get("TOOLKIT_MOBILE_REDIRECTS",
-                               "officetoolkit://auth,http://localhost:8081/auth").split(",") if r])
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "10.0.2.2")
+
+
+def local_redirect_problems(redirects):
+    """The mobile redirect URIs that must never be accepted by a production
+    deployment: loopback or emulator hosts and plain http. The default list
+    keeps the Metro dev URI for local runs only."""
+    from urllib.parse import urlsplit
+    bad = []
+    for uri in redirects:
+        parts = urlsplit(uri)
+        host = (parts.hostname or "").lower()
+        if (parts.scheme == "http" or host in _LOOPBACK_HOSTS
+                or host.startswith("127.") or host.endswith(".localhost")):
+            bad.append(uri)
+    return bad
+
+
+# Secure cookies mark a production (HTTPS) deployment (Dockerfile and
+# deploy/env.example set them). There the default list drops the Metro
+# dev URI, and an explicit list holding a loopback or http redirect stops
+# the app from starting, so no local listener can be handed a code.
+_PRODUCTION = os.environ.get("TOOLKIT_SECURE_COOKIES", "") == "1"
+_mobile_redirects = [r for r in os.environ.get(
+    "TOOLKIT_MOBILE_REDIRECTS",
+    "officetoolkit://auth" if _PRODUCTION
+    else "officetoolkit://auth,http://localhost:8081/auth").split(",") if r]
+if _PRODUCTION:
+    _bad_redirects = local_redirect_problems(_mobile_redirects)
+    if _bad_redirects:
+        raise RuntimeError(
+            "TOOLKIT_MOBILE_REDIRECTS holds development redirect URIs not "
+            "allowed in production: " + ", ".join(_bad_redirects))
+auth_store.register_client(MOBILE_CLIENT_ID, _mobile_redirects)
 
 # Stable base so a restart can recover and sweep orphans from a crashed run.
 OIDC_SCOPES = os.environ.get("TOOLKIT_OIDC_SCOPES", "openid email profile")

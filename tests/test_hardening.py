@@ -180,3 +180,54 @@ def test_bad_signature_on_known_kid_does_not_refetch(jwks_counter):
         token = _b64({"alg": "RS256", "kid": "known"}) + ".e30.c2ln"
         assert webapp._decode_idp_token(token, "https://idp.test/jwks") is None
     assert len(calls) == 1
+
+
+# ------------------------------- 4. no development redirects in production
+
+def test_local_redirect_problems():
+    from office_toolkit.web.app import local_redirect_problems
+    assert local_redirect_problems(["officetoolkit://auth"]) == []
+    bad = ["http://localhost:8081/auth", "http://10.0.2.2:8081/auth",
+           "https://127.0.0.1/auth", "http://app.example.com/auth",
+           "https://dev.localhost/auth"]
+    assert local_redirect_problems(bad) == bad
+
+
+def _boot(env_extra, tmp_path):
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(ROOT),
+           "TOOLKIT_AUTH_DB": str(tmp_path / "boot.db"),
+           "TOOLKIT_SECRET_KEY": "test-only-secret"}
+    env.update(env_extra)
+    return subprocess.run(
+        [sys.executable, "-c", "import office_toolkit.web.app as a; "
+         "print(a.auth_store.db.execute('SELECT redirect_uris FROM clients')"
+         ".fetchone()[0])"],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path), timeout=60)
+
+
+def test_production_refuses_dev_redirects(tmp_path):
+    r = _boot({"TOOLKIT_SECURE_COOKIES": "1",
+               "TOOLKIT_MOBILE_REDIRECTS":
+                   "officetoolkit://auth,http://localhost:8081/auth"}, tmp_path)
+    assert r.returncode != 0
+    assert "not allowed in production" in r.stderr
+
+
+def test_production_default_drops_the_dev_redirect(tmp_path):
+    r = _boot({"TOOLKIT_SECURE_COOKIES": "1"}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "officetoolkit://auth"
+
+
+def test_development_keeps_the_metro_redirect(tmp_path):
+    r = _boot({}, tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert "http://localhost:8081/auth" in r.stdout
+
+
+def test_shipped_production_env_has_no_dev_redirect():
+    from office_toolkit.web.app import local_redirect_problems
+    env = (ROOT / "deploy" / "env.example").read_text()
+    line = [ln for ln in env.splitlines()
+            if ln.startswith("TOOLKIT_MOBILE_REDIRECTS=")][0]
+    assert local_redirect_problems(line.split("=", 1)[1].split(",")) == []
