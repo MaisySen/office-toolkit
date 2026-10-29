@@ -240,6 +240,7 @@ jobs:
           name: office-toolkit-runtime-apk
           path: /tmp/apk
       - name: Install the app and drive sign-in
+        id: flow
         timeout-minutes: 15
         run: |
           "$ANDROID_HOME/platform-tools/adb" install -r /tmp/apk/app-debug.apk
@@ -272,6 +273,24 @@ jobs:
           im.verify()
           print(f'output OK: {len(data)} bytes, decodable JPEG')
           PYEOF
+      - name: Surface runtime evidence in the job log
+        # The artifact download redirect resists in-page reads, so the
+        # proof (or the failure state) also travels in the job log.
+        if: always()
+        run: |
+          if [ "${{ steps.flow.outcome }}" != "success" ]; then
+            echo '--- logcat (ReactNativeJS and crashes) ---'
+            "$ANDROID_HOME/platform-tools/adb" logcat -d -t 6000 2>/dev/null | grep -iE "ReactNativeJS|AndroidRuntime|FATAL EXCEPTION" | tail -50 || true
+            echo '--- app files and picker cache ---'
+            "$ANDROID_HOME/platform-tools/adb" root >/dev/null 2>&1 || true
+            "$ANDROID_HOME/platform-tools/adb" shell 'ls -la /data/data/au.fintex.officetoolkit/files/ 2>/dev/null; ls -la /data/data/au.fintex.officetoolkit/cache/ 2>/dev/null | head -8' || true
+          fi
+          find "$HOME/.maestro/tests" -name '*.png' 2>/dev/null | sort | while read -r SHOT; do
+            echo "---SHOT-BEGIN $(basename "$SHOT")---"
+            base64 -w0 "$SHOT"
+            echo
+            echo "---SHOT-END---"
+          done
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
         if: always()

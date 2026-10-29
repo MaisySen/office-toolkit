@@ -156,6 +156,7 @@ jobs:
           # a cold CI simulator; Maestro's default startup timeout is
           # too tight and fails before the app is ever launched.
           MAESTRO_DRIVER_STARTUP_TIMEOUT: '300000'
+        id: flow
         run: maestro test mobile/e2e/ios-runtime.yaml
       - name: Capture Keycloak state on failure
         if: failure()
@@ -165,6 +166,22 @@ jobs:
             -o /tmp/disc-probe.json || true
           echo '--- kc.log tail ---'
           tail -100 /tmp/kc.log || true
+      - name: Surface runtime evidence in the job log
+        # The artifact download redirect resists in-page reads, so the
+        # proof (or the failure state) also travels in the job log.
+        if: always()
+        run: |
+          if [ "${{ steps.flow.outcome }}" != "success" ]; then
+            echo '--- metro JS errors ---'
+            grep -iE " ERROR |Warning: " /tmp/metro.log | tail -40 || true
+            echo '--- kc.log token lines ---'
+            grep -iE "TokenEndpoint|invalid|error" /tmp/kc.log | tail -20 || true
+          fi
+          find "$HOME/.maestro/tests" -name '*.png' 2>/dev/null | sort | while read -r SHOT; do
+            echo "---SHOT-BEGIN $(basename "$SHOT")---"
+            base64 -i "$SHOT"
+            echo "---SHOT-END---"
+          done
       - uses: actions/upload-artifact@v4
         # always: a green run must also ship its screenshots as proof.
         if: always()
