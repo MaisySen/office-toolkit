@@ -223,7 +223,7 @@ def self_registration_journey(auth, ctx):
               + urllib.parse.urlencode(params))
     page.wait_for_load_state("load")
     print("login page:", page_summary(page))
-    reg = page.locator('a[href*="registrations"]')
+    reg = page.locator('a[href*="registration"]')
     if not reg.count():
         fail("no registration link on the Keycloak login page")
     reg.first.click()
