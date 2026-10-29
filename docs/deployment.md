@@ -46,9 +46,12 @@ journeys against the captured links.
 ## Hostname and host
 
 The owner selected the production hostname on 2026-10-29:
-doctool.multies.si. multies.si is HSTS preloaded with includeSubDomains,
-so the host must serve valid HTTPS from the very first request; Caddy's
-automatic TLS covers that once DNS points at the machine. Still
+doctool.multies.si. The multies.si apex advertises HSTS with
+includeSubDomains (and the preload directive in its header, but the
+domain is not on the Chromium preload list per hstspreload.org's status
+API, so only clients that have visited the apex inherit the policy).
+Regardless of HSTS, the host must serve valid HTTPS from day one;
+Caddy's automatic TLS covers that once DNS points at the machine. Still
 owner-level and open: the DNS record itself (the zone is on Cloudflare),
 the host machine, and the verification/reset sender identity. Until
 those exist the compose file is the reviewed but not-yet-executed
