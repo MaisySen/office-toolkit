@@ -65,13 +65,27 @@ appId: au.fintex.officetoolkit
 - assertVisible: "Choose file and run"
 - takeScreenshot: operation-ready
 - tapOn: "Choose file and run"
-# The system document picker opens on its browse root; the sample was
-# placed in the On My iPhone provider storage by the workflow.
+# The sample was placed in the On My iPhone provider storage by the
+# workflow. On the current runner image (iOS 26) the system document
+# picker opens on its Recents tab (empty on a fresh simulator, see the
+# simulator-failure screenshot of run 40965974887), so switch to the
+# Browse tab first, then open On My iPhone unless Browse already shows
+# the sample.
 - extendedWaitUntil:
-    visible: "On My iPhone"
+    visible: "Browse"
     timeout: 30000
 - takeScreenshot: picker-open
-- tapOn: "On My iPhone"
+- tapOn: "Browse"
+- waitForAnimationToEnd:
+    timeout: 5000
+- runFlow:
+    when:
+      notVisible: "runtime-sample.pdf"
+    commands:
+      - extendedWaitUntil:
+          visible: "On My iPhone"
+          timeout: 15000
+      - tapOn: "On My iPhone"
 - extendedWaitUntil:
     visible: "runtime-sample.pdf"
     timeout: 15000
