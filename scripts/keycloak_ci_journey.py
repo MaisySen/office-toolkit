@@ -106,12 +106,16 @@ def complete_action_link(link, password, new_password=None):
                                      "password-confirm": new_password})
         else:
             break
-        snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-        if "account has been updated" in snip.lower():
+        low = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).lower()
+        print(f"action step {step}: status={r.status_code} url={r.url[:90]}",
+              "| updated" if "account has been updated" in low else "",
+              "| invalid-creds" if "invalid username or password" in low else "",
+              "| expired" if "timed out" in low or "expired" in low else "",
+              "| cookie-missing" if "cookie not found" in low else "")
+        if "account has been updated" in low:
             return True
-    snip = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text))
-    print("action-link end state:", snip[:200])
-    return "account has been updated" in snip.lower()
+    low = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", r.text)).lower()
+    return "account has been updated" in low
 
 
 def login_via_toolkit(s, password):
