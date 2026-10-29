@@ -82,7 +82,8 @@ def mailpit_latest_link(timeout_s=60):
             body = full.get("Text", "") + full.get("HTML", "")
             m = re.search(r'https?://localhost:8080[^\s"<>]+', body)
             if m:
-                return m.group(0).replace("&amp;", "&"), full.get("Subject", "")
+                url = m.group(0).replace("&amp;", "&").rstrip(".,;'")
+                return url, full.get("Subject", "")
         time.sleep(2)
     fail("no mail for the journey user arrived")
 
@@ -128,7 +129,12 @@ def registration_journey(auth):
         fail(f"send verify email: {r.status_code} {r.text[:200]}")
     link, subject = mailpit_latest_link()
     print("captured mail:", subject)
-    requests.get(link)  # completes the VERIFY_EMAIL action
+    print("verify link:", link[:110])
+    r = requests.get(link)
+    print("verify GET:", r.status_code)
+    snip = re.sub(r"<[^>]+>", " ", r.text)
+    snip = re.sub(r"\s+", " ", snip).strip()
+    print("verify page:", snip[:300])
     status = requests.get(f"{KC}/admin/realms/{REALM}/users/{uid}",
                           headers=auth).json()
     if not status.get("emailVerified"):
