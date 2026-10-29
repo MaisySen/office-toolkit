@@ -10,6 +10,8 @@ import time
 
 import requests
 
+from ci_guard import assert_ci_only
+
 KC = os.environ.get("KC_BASE", "http://localhost:8080")
 # Issuer value embedded in tokens and expected by the toolkit API; in the
 # Android job this is the emulator's host alias (mapped on the runner).
@@ -26,6 +28,9 @@ def fail(msg):
 
 
 def main():
+    # Password-grant clients and fixed test secrets: CI only, never a real
+    # realm (see ci_guard.py).
+    assert_ci_only(KC, PUBLIC_ISSUER)
     last = "no attempt completed"
     for _ in range(30):
         try:

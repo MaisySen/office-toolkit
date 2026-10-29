@@ -20,6 +20,8 @@ import requests
 from playwright.sync_api import TimeoutError as PWTimeout
 from playwright.sync_api import sync_playwright
 
+from ci_guard import assert_ci_only
+
 KC = "http://localhost:8080"
 MAILPIT = "http://localhost:8025"
 REALM = "office-toolkit"
@@ -421,6 +423,9 @@ def mobile_pkce_journey(ctx):
 
 
 def main():
+    # Password-grant clients and fixed test secrets: CI only, never a real
+    # realm (see ci_guard.py).
+    assert_ci_only(KC, MAILPIT, APP)
     auth = admin_token()
     setup_realm(auth)
     # toolkit with Keycloak as issuer

@@ -39,6 +39,51 @@ def fail(msg):
     sys.exit(1)
 
 
+def production_clients(public_base):
+    """(clientId, public, redirect URIs) for the production realm."""
+    return [("office-toolkit-web", False,
+             [f"{public_base}/login/oidc/callback"]),
+            ("office-toolkit-mobile", True, ["officetoolkit://auth"])]
+
+
+def client_body(cid, public, redirects, web_secret):
+    """Production client shape. The password grant (direct access grants)
+    and the implicit flow are switched off explicitly rather than left to
+    Keycloak's defaults: only the CI seeding scripts, which ci_guard.py
+    confines to CI loopback stacks, ever turn the password grant on."""
+    body = {"clientId": cid, "enabled": True, "publicClient": public,
+            "standardFlowEnabled": True, "redirectUris": redirects,
+            "directAccessGrantsEnabled": False,
+            "implicitFlowEnabled": False,
+            "attributes": {"pkce.code.challenge.method": "S256"}}
+    if not public:
+        body["secret"] = web_secret
+        # Lets the issuer check below mint a token without creating
+        # a throwaway human user in the production realm.
+        body["serviceAccountsEnabled"] = True
+    return body
+
+
+DEV_REDIRECT_MARKERS = ("http://", "localhost", "127.0.0.1", "10.0.2.2")
+
+
+def realm_client_problems(clients):
+    """Problems on the toolkit's clients as Keycloak reports them."""
+    problems = []
+    for c in clients:
+        cid = c.get("clientId", "")
+        if not cid.startswith("office-toolkit"):
+            continue  # Keycloak's own built-in clients
+        if c.get("directAccessGrantsEnabled"):
+            problems.append(f"{cid} has the password grant enabled")
+        if c.get("implicitFlowEnabled"):
+            problems.append(f"{cid} has the implicit flow enabled")
+        for uri in c.get("redirectUris") or []:
+            if any(m in uri for m in DEV_REDIRECT_MARKERS):
+                problems.append(f"{cid} allows the dev redirect {uri}")
+    return problems
+
+
 def main():
     admin = need("KC_ADMIN")
     admin_pw = need("KC_ADMIN_PASSWORD")
@@ -78,23 +123,34 @@ def main():
     if r.status_code not in (201, 409):
         fail(f"realm create: {r.status_code} {r.text[:200]}")
 
-    for cid, public, redirects in [
-            ("office-toolkit-web", False,
-             [f"{PUBLIC_BASE}/login/oidc/callback"]),
-            ("office-toolkit-mobile", True,
-             ["officetoolkit://auth"])]:
-        body = {"clientId": cid, "enabled": True, "publicClient": public,
-                "standardFlowEnabled": True, "redirectUris": redirects,
-                "attributes": {"pkce.code.challenge.method": "S256"}}
-        if not public:
-            body["secret"] = web_secret
-            # Lets the issuer check below mint a token without creating
-            # a throwaway human user in the production realm.
-            body["serviceAccountsEnabled"] = True
+    for cid, public, redirects in production_clients(PUBLIC_BASE):
+        body = client_body(cid, public, redirects, web_secret)
         r = requests.post(f"{KC}/admin/realms/{REALM}/clients",
                           headers=auth, timeout=10, json=body)
-        if r.status_code not in (201, 409):
+        if r.status_code == 409:
+            # Already there (a rerun, or a realm touched by hand): bring
+            # it back to the production shape instead of trusting it.
+            existing = requests.get(
+                f"{KC}/admin/realms/{REALM}/clients", headers=auth,
+                params={"clientId": cid}, timeout=10).json()
+            if not existing:
+                fail(f"client {cid}: exists but cannot be read back")
+            r = requests.put(
+                f"{KC}/admin/realms/{REALM}/clients/{existing[0]['id']}",
+                headers=auth, timeout=10, json=body)
+            if r.status_code != 204:
+                fail(f"client {cid} reconcile: {r.status_code} {r.text[:200]}")
+        elif r.status_code != 201:
             fail(f"client {cid}: {r.status_code} {r.text[:200]}")
+
+    # Read the realm back: the password grant must be off and no dev
+    # redirect may remain on any toolkit client, whoever created it.
+    clients = requests.get(f"{KC}/admin/realms/{REALM}/clients",
+                           headers=auth, timeout=10).json()
+    problems = realm_client_problems(clients)
+    if problems:
+        fail("production realm check: " + "; ".join(problems))
+    print("CLIENTS OK: password grant off, production redirects only")
 
     cid = requests.get(f"{KC}/admin/realms/{REALM}/clients", headers=auth,
                        params={"clientId": "office-toolkit-mobile"},

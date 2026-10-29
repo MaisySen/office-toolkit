@@ -231,3 +231,62 @@ def test_shipped_production_env_has_no_dev_redirect():
     line = [ln for ln in env.splitlines()
             if ln.startswith("TOOLKIT_MOBILE_REDIRECTS=")][0]
     assert local_redirect_problems(line.split("=", 1)[1].split(",")) == []
+
+
+# ------------------- 5. CI password-grant seeding kept off production realms
+
+def test_ci_seed_refused_outside_ci():
+    guard = _load_script("ci_guard")
+    assert guard.ci_seed_problems(["http://localhost:8080"], env={})
+    assert not guard.ci_seed_problems(["http://localhost:8080"],
+                                      env={"GITHUB_ACTIONS": "true"})
+
+
+@pytest.mark.parametrize("url", [
+    "https://doctool.multies.si/auth",
+    "http://doctool.multies.si:8080",
+    "https://localhost:8080",
+    "http://192.168.1.10:8080",
+])
+def test_ci_seed_refused_against_real_hosts(url):
+    guard = _load_script("ci_guard")
+    assert guard.ci_seed_problems([url], env={"GITHUB_ACTIONS": "true"})
+
+
+def test_ci_seed_allows_the_ci_loopbacks():
+    guard = _load_script("ci_guard")
+    urls = ["http://localhost:8080", "http://127.0.0.1:8080/realms/x",
+            "http://10.0.2.2:8080/realms/office-toolkit"]
+    assert guard.ci_seed_problems(urls, env={"GITHUB_ACTIONS": "true"}) == []
+
+
+def test_ci_scripts_call_the_guard():
+    for name in ("ci_runtime_stack.py", "keycloak_ci_journey.py"):
+        src = (ROOT / "scripts" / name).read_text()
+        main = src[src.index("def main"):]
+        # the guard is the first thing main does, before any Keycloak call
+        assert "assert_ci_only(" in main[:400], name
+
+
+def test_production_clients_have_the_password_grant_off():
+    prov = _load_script("provision_keycloak")
+    for cid, public, redirects in prov.production_clients("https://doctool.multies.si"):
+        body = prov.client_body(cid, public, redirects, "placeholder")
+        assert body["directAccessGrantsEnabled"] is False
+        assert body["implicitFlowEnabled"] is False
+        assert not any(m in u for u in body["redirectUris"]
+                       for m in prov.DEV_REDIRECT_MARKERS)
+    assert prov.realm_client_problems([
+        {"clientId": "office-toolkit-web", "redirectUris": ["https://x/cb"]},
+        {"clientId": "admin-cli", "directAccessGrantsEnabled": True},
+    ]) == []
+
+
+def test_production_check_catches_a_ci_shaped_client():
+    prov = _load_script("provision_keycloak")
+    problems = prov.realm_client_problems([
+        {"clientId": "office-toolkit-mobile", "directAccessGrantsEnabled": True,
+         "redirectUris": ["officetoolkit://auth", "http://localhost:8081/auth"]},
+    ])
+    assert any("password grant" in p for p in problems)
+    assert any("localhost" in p for p in problems)
