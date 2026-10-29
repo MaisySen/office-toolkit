@@ -1,19 +1,22 @@
-// OAuth2 authorization-code + PKCE sign-in against the toolkit backend.
-// Tokens live in expo-secure-store (Keychain / Keystore), never in AsyncStorage.
+// OAuth2 authorization-code + PKCE sign-in against the maintained identity
+// provider (a Keycloak realm). The mobile app is a public client; no secret
+// is stored or shipped. Tokens live in expo-secure-store (Keychain /
+// Keystore), never in AsyncStorage.
 
 import * as AuthSession from "expo-auth-session";
 import { getToken, setToken } from "./api";
 
 export type AuthConfig = {
-  baseUrl: string;
+  issuer: string; // realm base, e.g. https://host/realms/office-toolkit
   clientId: string;
   redirectUri: string;
 };
 
-export function endpoints(baseUrl: string) {
+export function endpoints(issuer: string) {
+  const base = issuer.replace(/\/+$/, "");
   return {
-    authorizationEndpoint: `${baseUrl}/oauth/authorize`,
-    tokenEndpoint: `${baseUrl}/oauth/token`,
+    authorizationEndpoint: `${base}/protocol/openid-connect/auth`,
+    tokenEndpoint: `${base}/protocol/openid-connect/token`,
   };
 }
 
@@ -23,9 +26,9 @@ export function useSignIn(config: AuthConfig) {
       clientId: config.clientId,
       redirectUri: config.redirectUri,
       usePKCE: true,
-      scopes: [],
+      scopes: ["openid", "email", "profile"],
     },
-    endpoints(config.baseUrl)
+    endpoints(config.issuer)
   );
 
   const signIn = async (): Promise<void> => {
@@ -42,7 +45,7 @@ export function useSignIn(config: AuthConfig) {
         redirectUri: config.redirectUri,
         extraParams: { code_verifier: request?.codeVerifier || "" },
       },
-      endpoints(config.baseUrl)
+      endpoints(config.issuer)
     );
     await setToken(token.accessToken);
   };

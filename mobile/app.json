@@ -14,7 +14,9 @@
       "package": "au.fintex.officetoolkit"
     },
     "extra": {
-      "apiBaseUrl": "http://localhost:5000"
+      "apiBaseUrl": "http://localhost:5000",
+      "oidcIssuer": "http://localhost:8080/realms/office-toolkit",
+      "oidcClientId": "office-toolkit-mobile"
     },
     "plugins": [
       "expo-asset"
