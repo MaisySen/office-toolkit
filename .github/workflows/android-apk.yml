@@ -23,12 +23,15 @@ jobs:
         run: npx expo prebuild --platform android --non-interactive --no-install --clean
         env:
           CI: 1
-      - name: Pin Kotlin to the Compose Compiler's required version
-        # Compose Compiler 1.5.15 (expo-modules-core) requires Kotlin
-        # 1.9.25; the prebuild template's default lags on some patch
-        # releases, so pin through the template's own gradle property.
+      - name: Align Kotlin with the version React Native actually applies
+        # RN 0.76's version catalog pins the Kotlin Gradle Plugin to
+        # 1.9.24, while the prebuild template's ext default (1.9.25) only
+        # drives expo-modules-core's compose-compiler map, producing a
+        # 1.5.15-compiler/1.9.24-plugin mismatch. Pinning the template's
+        # own property to 1.9.24 selects compose compiler 1.5.14, the
+        # pairing in expo-modules-core's compatibility map.
         working-directory: mobile/android
-        run: echo "android.kotlinVersion=1.9.25" >> gradle.properties
+        run: echo "android.kotlinVersion=1.9.24" >> gradle.properties
       - name: Build debug APK with the runner's preinstalled Android SDK
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
