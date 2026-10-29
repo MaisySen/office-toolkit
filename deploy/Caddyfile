@@ -3,6 +3,9 @@
 # KC_HOSTNAME=https://doctool.multies.si/auth so its issuer, discovery
 # document and redirects all resolve through this public base.
 doctool.multies.si {
+	# bare /auth falls through the /auth/* matcher; send it to the
+	# canonical trailing-slash path so Keycloak links resolve.
+	redir /auth /auth/ 308
 	handle /auth/* {
 		reverse_proxy 127.0.0.1:8080
 	}
