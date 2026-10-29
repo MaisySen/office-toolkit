@@ -191,8 +191,68 @@ def current_user_id():
         return uid
     header = request.headers.get("Authorization", "")
     if header.startswith("Bearer "):
-        return auth_store.authenticate_bearer(header[7:])
+        token = header[7:]
+        uid = auth_store.authenticate_bearer(token)
+        if uid is not None:
+            return uid
+        return _idp_bearer_user_id(token)
     return None
+
+
+# Bearer tokens minted by the configured IdP (mobile public clients use
+# PKCE directly against it). JWKS responses are cached per jwks_uri.
+_JWKS_CACHE: dict[str, tuple[dict, float]] = {}
+_JWKS_TTL = 300.0
+
+
+def _idp_bearer_user_id(token: str) -> int | None:
+    """Validate a bearer JWT from the configured IdP: signature against the
+    provider JWKS, issuer and expiry, and the authorized party must be the
+    registered mobile client. Identity resolves via the token's email claim
+    or userinfo with a subject match, the same rule as the web callback.
+    Anything unverifiable means anonymous, never a guess."""
+    if oidc_client is None:
+        return None
+    import requests as _requests
+    from authlib.jose import JsonWebToken
+    try:
+        meta = oidc_client.load_server_metadata()
+        jwks_uri = meta["jwks_uri"]
+        cached = _JWKS_CACHE.get(jwks_uri)
+        if cached is None or time.time() - cached[1] > _JWKS_TTL:
+            cached = (_requests.get(jwks_uri, timeout=5).json(), time.time())
+            _JWKS_CACHE[jwks_uri] = cached
+        claims = JsonWebToken(["RS256"]).decode(token, cached[0])
+        claims.validate()
+    except Exception:
+        return None
+    issuer = (meta.get("issuer") or "").rstrip("/")
+    if not issuer or claims.get("iss", "").rstrip("/") != issuer:
+        return None
+    aud = claims.get("aud") or []
+    if isinstance(aud, str):
+        aud = [aud]
+    if claims.get("azp") != MOBILE_CLIENT_ID and MOBILE_CLIENT_ID not in aud:
+        return None
+    sub = claims.get("sub")
+    if not sub:
+        return None
+    email = (claims.get("email") or "").strip().lower()
+    if not email:
+        try:
+            ui = _requests.get(meta["userinfo_endpoint"], timeout=5,
+                               headers={"Authorization": f"Bearer {token}"}).json()
+        except Exception:
+            return None
+        if str(ui.get("sub", "")) != str(sub):
+            return None
+        email = (ui.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return None
+    try:
+        return auth_store.find_or_create_oidc_user(email, issuer, str(sub))
+    except ToolkitError:
+        return None
 
 
 def csrf_token() -> str:

@@ -358,3 +358,76 @@ class TestSsoModeGating:
         body = r.get_data(as_text=True)
         assert "Sign in with SSO" in body
         assert 'name="password"' not in body
+
+
+def _mint_access_token(idp, **over):
+    now = int(time.time())
+    claims = {"iss": over.get("iss", idp.issuer),
+              "sub": over.get("sub", idp.sub),
+              "azp": over.get("azp", "office-toolkit-mobile"),
+              "aud": over.get("aud", "account"),
+              "iat": now, "exp": over.get("exp", now + 3600)}
+    if over.get("email", True):
+        claims["email"] = idp.email
+    header = {"alg": "RS256", "kid": "test", "typ": "JWT"}
+    si = (_b64url(json.dumps(header).encode()) + "."
+          + _b64url(json.dumps(claims).encode())).encode()
+    key = idp.other_key if over.get("wrong_key") else idp.key
+    sig = key.sign(si, padding.PKCS1v15(), hashes.SHA256())
+    return si.decode() + "." + _b64url(sig)
+
+
+class TestIdpBearerTokens:
+    """Mobile clients carry IdP-minted access tokens; the API must validate
+    them (signature, issuer, expiry, authorized party) and map identity,
+    and must reject anything unverifiable."""
+
+    def _call(self, client, token):
+        # /api/run/<slug> requires a user; with no file attached an
+        # authenticated call lands on the 400 no-file path, anything
+        # unauthenticated is a 401. That split is the assertion surface.
+        return client.post("/api/run/to-jpeg",
+                           headers={"Authorization": f"Bearer {token}"})
+
+    def test_valid_idp_token_authenticates(self, oidc_app, idp):
+        client, store = oidc_app
+        r = self._call(client, _mint_access_token(idp))
+        assert r.status_code == 400  # authenticated; no file attached
+        row = store.db.execute("SELECT provider FROM users WHERE email=?",
+                               (idp.email,)).fetchone()
+        assert row["provider"].startswith("oidc:")
+
+    def test_email_falls_back_to_userinfo(self, oidc_app, idp):
+        client, _ = oidc_app
+        r = self._call(client, _mint_access_token(idp, email=False))
+        assert r.status_code == 400
+
+    def test_userinfo_sub_mismatch_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        idp.userinfo_sub = "someone-else"
+        r = self._call(client, _mint_access_token(idp, email=False))
+        assert r.status_code == 401
+
+    def test_wrong_azp_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, azp="other-client", aud="other-client")).status_code == 401
+
+    def test_wrong_signature_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, wrong_key=True)).status_code == 401
+
+    def test_expired_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, exp=int(time.time()) - 60)).status_code == 401
+
+    def test_wrong_issuer_rejected(self, oidc_app, idp):
+        client, _ = oidc_app
+        assert self._call(client, _mint_access_token(
+            idp, iss="http://evil.example")).status_code == 401
+
+    def test_garbage_token_rejected(self, oidc_app):
+        client, _ = oidc_app
+        assert self._call(client, "not-a-jwt").status_code == 401
