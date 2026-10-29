@@ -5,9 +5,10 @@
   "main": "node_modules/expo/AppEntry.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
+    "android": "expo run:android",
     "typecheck": "tsc --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "ios": "expo run:ios"
   },
   "dependencies": {
     "@expo/metro-runtime": "~4.0.1",

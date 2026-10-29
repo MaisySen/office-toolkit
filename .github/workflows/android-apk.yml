@@ -23,6 +23,12 @@ jobs:
         run: npx expo prebuild --platform android --non-interactive --no-install --clean
         env:
           CI: 1
+      - name: Pin Kotlin to the Compose Compiler's required version
+        # Compose Compiler 1.5.15 (expo-modules-core) requires Kotlin
+        # 1.9.25; the prebuild template's default lags on some patch
+        # releases, so pin through the template's own gradle property.
+        working-directory: mobile/android
+        run: echo "android.kotlinVersion=1.9.25" >> gradle.properties
       - name: Build debug APK with the runner's preinstalled Android SDK
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon
