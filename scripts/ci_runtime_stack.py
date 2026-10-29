@@ -45,7 +45,7 @@ def main():
              f"last result: {last}")
     auth = {"Authorization": "Bearer " + r.json()["access_token"]}
 
-    r = requests.post(f"{KC}/admin/realms", headers=auth, json={
+    r = requests.post(f"{KC}/admin/realms", headers=auth, timeout=10, json={
         "realm": REALM, "enabled": True,
         "registrationAllowed": True, "verifyEmail": True,
         "resetPasswordAllowed": True, "loginWithEmailAllowed": True,
@@ -66,15 +66,15 @@ def main():
         else:
             body["secret"] = "ci-web-secret"
         r = requests.post(f"{KC}/admin/realms/{REALM}/clients",
-                          headers=auth, json=body)
+                          headers=auth, timeout=10, json=body)
         if r.status_code not in (201, 409):
             fail(f"client {cid}: {r.status_code} {r.text[:200]}")
     cid = requests.get(f"{KC}/admin/realms/{REALM}/clients", headers=auth,
-                       params={"clientId": "office-toolkit-mobile"}
-                       ).json()[0]["id"]
+                       params={"clientId": "office-toolkit-mobile"},
+                       timeout=10).json()[0]["id"]
     requests.post(
         f"{KC}/admin/realms/{REALM}/clients/{cid}/protocol-mappers/models",
-        headers=auth, json={
+        headers=auth, timeout=10, json={
             "name": "office-toolkit-api-audience",
             "protocol": "openid-connect",
             "protocolMapper": "oidc-audience-mapper",
@@ -82,13 +82,41 @@ def main():
                        "id.token.claim": "false",
                        "access.token.claim": "true"}})
 
-    r = requests.post(f"{KC}/admin/realms/{REALM}/users", headers=auth, json={
+    r = requests.post(f"{KC}/admin/realms/{REALM}/users", headers=auth,
+                      timeout=10, json={
         "username": EMAIL, "email": EMAIL, "enabled": True,
         "emailVerified": True, "firstName": "Runtime", "lastName": "User",
         "credentials": [{"type": "password", "value": PASSWORD,
                          "temporary": False}]})
     if r.status_code not in (201, 409):
         fail(f"user create: {r.status_code} {r.text[:200]}")
+
+    # The issuer the app will see must equal the pinned value: check the
+    # discovery document AND a real minted token, both fetched through
+    # the app-facing host (10.0.2.2 on Android, localhost on iOS).
+    disc = requests.get(
+        f"{PUBLIC_ISSUER}/.well-known/openid-configuration",
+        timeout=10).json()
+    if disc.get("issuer") != PUBLIC_ISSUER:
+        fail(f"discovery issuer {disc.get('issuer')!r} != pinned "
+             f"{PUBLIC_ISSUER!r}")
+    r = requests.post(
+        f"{PUBLIC_ISSUER}/protocol/openid-connect/token", timeout=10,
+        data={"grant_type": "password",
+              "client_id": "office-toolkit-mobile",
+              "username": EMAIL, "password": PASSWORD})
+    if r.status_code != 200:
+        fail(f"issuer-check token grant: {r.status_code} {r.text[:200]}")
+    import base64
+    import json as _json
+    seg = r.json()["access_token"].split(".")[1]
+    seg += "=" * (-len(seg) % 4)
+    claims = _json.loads(base64.urlsafe_b64decode(seg))
+    if claims.get("iss") != PUBLIC_ISSUER:
+        fail(f"minted token iss {claims.get('iss')!r} != pinned "
+             f"{PUBLIC_ISSUER!r}")
+    print(f"ISSUER OK: discovery and minted token both pin to "
+          f"{PUBLIC_ISSUER}")
 
     if os.path.exists("/tmp/ci-runtime-auth.db"):
         os.unlink("/tmp/ci-runtime-auth.db")

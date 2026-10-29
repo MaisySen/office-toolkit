@@ -32,6 +32,7 @@ jobs:
             https://github.com/axllent/mailpit/releases/latest/download/mailpit-darwin-arm64.tar.gz
           tar -xzf /tmp/mailpit.tar.gz -C /tmp mailpit
       - name: Start Keycloak, Mailpit and the toolkit app
+        timeout-minutes: 10
         run: |
           KC_BOOTSTRAP_ADMIN_USERNAME=admin \
           KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
@@ -49,6 +50,7 @@ jobs:
         working-directory: mobile
         run: npm ci
       - name: Build the app for the simulator
+        timeout-minutes: 30
         working-directory: mobile
         env:
           CI: 1
@@ -61,6 +63,7 @@ jobs:
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO build
       - name: Verify and boot an installed simulator runtime
+        timeout-minutes: 15
         run: |
           xcrun simctl list runtimes
           RUNTIME=$(xcrun simctl list runtimes -j \
@@ -88,6 +91,7 @@ jobs:
           MAESTRO_DIR=$(find /tmp -maxdepth 1 -type d -name 'maestro*' | head -1)
           echo "$MAESTRO_DIR/bin" >> "$GITHUB_PATH"
       - name: Drive sign-in and the operation screen
+        timeout-minutes: 15
         run: maestro test mobile/e2e/ios-runtime.yaml
       - uses: actions/upload-artifact@v4
         if: failure()

@@ -111,6 +111,7 @@ jobs:
               || { echo "unexpected license accepted: $f"; exit 1; }
           done
       - name: Start Keycloak, Mailpit and the toolkit app
+        timeout-minutes: 10
         run: |
           echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
           # No --hostname override: KC 26 derives the issuer from the
@@ -133,6 +134,7 @@ jobs:
             python3 scripts/ci_runtime_stack.py \
             || { tail -60 /tmp/kc.log; exit 1; }
       - name: Boot the emulator and install the APK
+        timeout-minutes: 15
         run: |
           echo "no" | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" create avd -n ci \
             -k 'system-images;android-34;google_apis;x86_64' --force
@@ -145,6 +147,7 @@ jobs:
           name: office-toolkit-runtime-apk
           path: /tmp/apk
       - name: Install the app and drive sign-in
+        timeout-minutes: 15
         run: |
           "$ANDROID_HOME/platform-tools/adb" install -r /tmp/apk/app-debug.apk
           maestro test mobile/e2e/android-runtime.yaml
