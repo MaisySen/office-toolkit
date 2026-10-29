@@ -87,6 +87,12 @@ class AuthStore:
         if "provider" not in cols:
             self.db.execute("ALTER TABLE users ADD COLUMN provider "
                             "TEXT NOT NULL DEFAULT 'local'")
+        if "sub" not in cols:
+            self.db.execute("ALTER TABLE users ADD COLUMN sub "
+                            "TEXT NOT NULL DEFAULT ''")
+        self.db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_sub "
+            "ON users(provider, sub) WHERE sub != ''")
         self.db.commit()
 
     # ------------------------------------------------------------ accounts
@@ -226,27 +232,39 @@ class AuthStore:
 
     # ------------------------------------------------------------ oidc
 
-    def find_or_create_oidc_user(self, email: str, issuer: str) -> int:
-        # Resolve an SSO login to a local account. Never links silently: a
-        # pre-existing local password account with the same email stays
-        # password-only, so a misconfigured provider cannot take it over.
-        # Account linking is a deliberate manual step.
+    def find_or_create_oidc_user(self, email: str, issuer: str, sub: str) -> int:
+        # Resolve an SSO login to a local account, keyed by issuer + subject.
+        # The subject is the stable identity; email is an attribute that the
+        # provider may change or reassign, so it is never the lookup key.
+        # Two takeover guards: a pre-existing local password account with the
+        # same email is never linked silently, and a different subject
+        # presenting an email already held by another SSO account is refused.
         provider = "oidc:" + issuer.rstrip("/")
         email = email.strip().lower()
-        row = self.db.execute("SELECT id, provider FROM users WHERE email=?",
-                              (email,)).fetchone()
+        if not sub:
+            raise ToolkitError("The identity provider did not supply a subject.")
+        row = self.db.execute(
+            "SELECT id, email FROM users WHERE provider=? AND sub=?",
+            (provider, sub)).fetchone()
         if row:
-            if row["provider"] == provider:
-                return row["id"]
-            if row["provider"] == "local":
+            if row["email"] != email:
+                self.db.execute("UPDATE users SET email=? WHERE id=?",
+                                (email, row["id"]))
+                self.db.commit()
+            return row["id"]
+        clash = self.db.execute("SELECT provider FROM users WHERE email=?",
+                                (email,)).fetchone()
+        if clash:
+            if clash["provider"] == "local":
                 raise ToolkitError(
                     "An account with this email already exists. "
                     "Sign in with your password instead.")
-            raise ToolkitError("This email is registered with a different "
-                               "identity provider.")
+            raise ToolkitError(
+                "This email is held by a different sign-in identity. "
+                "Ask the administrator to review the account.")
         cur = self.db.execute(
-            "INSERT INTO users (email, password_hash, created_at, provider) "
-            "VALUES (?,?,?,?)", (email, "", time.time(), provider))
+            "INSERT INTO users (email, password_hash, created_at, provider, sub) "
+            "VALUES (?,?,?,?,?)", (email, "", time.time(), provider, sub))
         self.db.commit()
         return cur.lastrowid
 

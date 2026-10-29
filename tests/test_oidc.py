@@ -35,6 +35,10 @@ class FakeIdP:
         self.issuer_override = None
         self.expired = False
         self.nonce_override = None
+        self.sub = "idp-subject-123"
+        self.include_sub = True
+        self.email_in_id_token = True
+        self.userinfo_sub = None  # None means "same as sub"
         self.email = "sso-user@example.com"
         self.email_verified = True
         self.token_calls = 0
@@ -64,12 +68,19 @@ class FakeIdP:
                         "authorization_endpoint": idp.issuer + "/authorize",
                         "token_endpoint": idp.issuer + "/token",
                         "jwks_uri": idp.issuer + "/jwks",
+                        "userinfo_endpoint": idp.issuer + "/userinfo",
                     })
                 elif u.path == "/jwks":
                     nums = idp.key.public_key().public_numbers()
                     self._json({"keys": [{
                         "kty": "RSA", "use": "sig", "alg": "RS256", "kid": "test",
                         "n": _int_b64(nums.n), "e": _int_b64(nums.e)}]})
+                elif u.path == "/userinfo":
+                    self._json({
+                        "sub": idp.userinfo_sub if idp.userinfo_sub is not None
+                               else idp.sub,
+                        "email": idp.email,
+                        "email_verified": idp.email_verified})
                 elif u.path == "/authorize":
                     idp._seen_nonce = q["nonce"][0]
                     if "code_challenge" in q:
@@ -97,14 +108,16 @@ class FakeIdP:
                 claims = {
                     "iss": idp.issuer_override or idp.issuer,
                     "aud": idp.audience,
-                    "sub": "idp-subject-123",
-                    "email": idp.email,
-                    "email_verified": idp.email_verified,
                     "nonce": idp.nonce_override if idp.nonce_override is not None
                              else idp._seen_nonce,
                     "iat": now,
                     "exp": now - 3600 if idp.expired else now + 3600,
                 }
+                if idp.include_sub:
+                    claims["sub"] = idp.sub
+                if idp.email_in_id_token:
+                    claims["email"] = idp.email
+                    claims["email_verified"] = idp.email_verified
                 header = {"alg": "RS256", "kid": "test", "typ": "JWT"}
                 signing_input = (_b64url(json.dumps(header).encode()) + "."
                                  + _b64url(json.dumps(claims).encode())).encode()
@@ -260,3 +273,53 @@ def test_no_silent_linking_of_local_account(oidc_app, idp):
     store.register("sso-user@example.com", "correct horse")
     rv = run_login(client)
     assert rv.status_code == 400 and b"already exists" in rv.data
+
+
+def test_same_subject_new_email_signs_into_same_account(oidc_app, idp):
+    client, store = oidc_app
+    assert run_login(client).status_code == 302
+    uid1 = store.db.execute("SELECT id FROM users WHERE email=?",
+                            ("sso-user@example.com",)).fetchone()["id"]
+    client.get("/logout")
+    idp.email = "renamed@example.com"
+    assert run_login(client).status_code == 302
+    row = store.db.execute("SELECT id, email FROM users WHERE provider LIKE 'oidc:%' "
+                           "AND sub='idp-subject-123'").fetchone()
+    assert row["id"] == uid1 and row["email"] == "renamed@example.com"
+    assert store.db.execute("SELECT count(*) c FROM users").fetchone()["c"] == 1
+
+
+def test_email_reassigned_to_new_subject_refused(oidc_app, idp):
+    client, store = oidc_app
+    assert run_login(client).status_code == 302
+    client.get("/logout")
+    idp.sub = "a-different-person"
+    rv = run_login(client)
+    assert rv.status_code == 400 and b"different sign-in identity" in rv.data
+    # original account untouched
+    row = store.db.execute("SELECT email FROM users WHERE sub='idp-subject-123'").fetchone()
+    assert row["email"] == "sso-user@example.com"
+
+
+def test_missing_subject_rejected(oidc_app, idp):
+    idp.include_sub = False
+    client, _ = oidc_app
+    assert run_login(client).status_code == 400
+
+
+def test_email_from_userinfo_when_absent_in_id_token(oidc_app, idp):
+    idp.email_in_id_token = False
+    client, store = oidc_app
+    rv = run_login(client)
+    assert rv.status_code == 302
+    assert client.get("/").status_code == 200
+    row = store.db.execute("SELECT email FROM users WHERE sub='idp-subject-123'").fetchone()
+    assert row["email"] == "sso-user@example.com"
+
+
+def test_userinfo_sub_mismatch_rejected(oidc_app, idp):
+    idp.email_in_id_token = False
+    idp.userinfo_sub = "someone-else-entirely"
+    client, _ = oidc_app
+    rv = run_login(client)
+    assert rv.status_code == 400 and b"subject does not match" in rv.data

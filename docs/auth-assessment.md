@@ -87,7 +87,22 @@ Deliberate choices:
   replaced by Authlib before merge, on review feedback that maintained RP
   code beats no-new-dependency bespoke security code.
 
-Not yet done: end-to-end verification against a real maintained IdP
-(currently covered by a full-flow fake-IdP integration test over real HTTP,
-including negative signature/audience/issuer/expiry/nonce/state-replay
-cases), MFA, and mobile OIDC discovery.
+Verified end-to-end against a real maintained IdP: Authelia v4.39.28
+(Apache-2.0) running locally with TLS, a file-backed user and a public
+PKCE-S256 client. The scripted flow (scripts/oidc_e2e_authelia.py) drove the
+real browser path: discovery, authorize redirect, portal login, code
+exchange, JWKS signature verification and login. Authelia serves the email
+claim from userinfo rather than the ID token, so the app falls back to the
+userinfo endpoint and enforces the spec-required subject match; both
+behaviours are covered by tests (15 OIDC tests: happy paths plus wrong
+signature, wrong audience, wrong issuer, expired token, nonce mismatch,
+forged state, state replay, unverified email, no silent linking, subject
+continuity across email change, email-reassignment refusal, missing
+subject, userinfo fallback and userinfo subject mismatch).
+
+Accounts are keyed by issuer + subject; email is an updatable attribute, so
+a provider reassigning an email cannot hand an existing account to a
+different subject.
+
+Not yet done: MFA, mobile OIDC discovery, and running against a second IdP
+(Keycloak) for portability evidence.

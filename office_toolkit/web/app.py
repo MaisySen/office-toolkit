@@ -86,16 +86,31 @@ def oidc_callback():
         # iss, aud/azp, exp and iat claims; nonce binds the token to this
         # browser session's login attempt.
         claims = oidc_client.parse_id_token(token, nonce=nonce)
-    except Exception:
+    except Exception as e:
         return fail("Sign-in could not be verified. Try again.")
     email = (claims.get("email") or "").strip().lower()
+    email_verified = claims.get("email_verified")
+    if not email:
+        # Many providers return profile claims only from userinfo (OIDC Core
+        # default). Fetch it over the verified TLS channel and require the
+        # subject to match the ID token, per spec.
+        try:
+            meta = oidc_client.load_server_metadata()
+            ui = oidc_client.get(meta["userinfo_endpoint"], token=token).json()
+        except Exception:
+            return fail("The identity provider's userinfo endpoint failed.")
+        if str(ui.get("sub", "")) != str(claims.get("sub", "")):
+            return fail("Userinfo subject does not match the ID token.")
+        email = (ui.get("email") or "").strip().lower()
+        email_verified = ui.get("email_verified")
     if not email or "@" not in email:
         return fail("The identity provider did not supply a usable email. "
                     "Map the email scope/claim for this client.")
-    if claims.get("email_verified") is False:
+    if email_verified is False:
         return fail("The identity provider reports this email as unverified.")
     try:
-        uid = auth_store.find_or_create_oidc_user(email, claims.get("iss", ""))
+        uid = auth_store.find_or_create_oidc_user(email, claims.get("iss", ""),
+                                                  claims.get("sub", ""))
     except ToolkitError as e:
         return fail(str(e))
     flask_session.clear()  # session fixation: fresh session on privilege change
