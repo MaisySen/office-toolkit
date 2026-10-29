@@ -85,5 +85,21 @@ appId: au.fintex.officetoolkit
     timeout: 120000
 - takeScreenshot: operation-result
 - tapOn: "Share"
-- back
+# The chooser opens asynchronously in its own window, which hides the
+# app's hierarchy from Maestro. Wait until it is up, so the back press
+# dismisses it instead of landing before it opens (the sheet then stays
+# over the app, as a failure dump showed). Then press back until the
+# app's result line is readable again, at most three times.
+- extendedWaitUntil:
+    notVisible: "Done: .+"
+    timeout: 15000
+- takeScreenshot: share-sheet
+- repeat:
+    while:
+      notVisible: "Done: .+"
+    times: 3
+    commands:
+      - back
+      - waitForAnimationToEnd:
+          timeout: 3000
 - assertVisible: "Done: .+"
