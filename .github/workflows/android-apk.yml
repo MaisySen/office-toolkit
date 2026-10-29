@@ -1,0 +1,32 @@
+name: android-apk
+on: [push]
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install JS dependencies
+        run: npm ci
+      - name: Generate the native Android project
+        run: npx expo prebuild --platform android --non-interactive --no-install --clean
+        env:
+          CI: 1
+      - name: Build debug APK with the runner's preinstalled Android SDK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: office-toolkit-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk

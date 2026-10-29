@@ -1,0 +1,4 @@
+# expo prebuild output is generated on demand (CI builds it fresh)
+/android/
+/ios/
+node_modules/
