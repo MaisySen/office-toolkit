@@ -6,10 +6,16 @@ SDK repository metadata and:
      (channel-0 only; preview channels are a refusal);
   2. asserts every one of them carries ONLY the android-sdk-license
      identifier;
-  3. hashes the license text (sdkmanager normalization: trim + collapse
-     whitespace, sha1) and requires it to equal the approved pinned hash
-     below, recorded when the owner approved the standard Android SDK
-     License Agreement at https://developer.android.com/studio/terms.
+  3. hashes the license text (trim + collapse whitespace, sha1; this
+     normalization is a candidate match for sdkmanager's own hashing and
+     is NOT yet proven identical - the install step fails closed if it
+     differs) and requires it to equal the pinned hash below. The pin is
+     the hash of the current android-sdk-license text served in the
+     repository metadata; it is a CANDIDATE until the owner approves
+     that exact text, and becomes the approved pin only on that yes.
+     Owner approval covers the sdkmanager-served metadata text, which
+     differs in a few sections from the live
+     https://developer.android.com/studio/terms page.
 
 Any mismatch exits non-zero BEFORE sdkmanager is invoked, so no changed
 or unexpected terms can ever be accepted. The workflow then seeds only
@@ -28,7 +34,7 @@ SOURCES = [
     "https://dl.google.com/android/repository/repository2-3.xml",
     "https://dl.google.com/android/repository/sys-img/google_apis/sys-img2-1.xml",
 ]
-APPROVED_SHA1 = "a90c249c9e874a0ca1854dd16aa9827dec1430da"
+PINNED_SHA1 = "a90c249c9e874a0ca1854dd16aa9827dec1430da"  # candidate until owner yes
 APPROVED_LICENSE_ID = "android-sdk-license"
 
 
@@ -55,9 +61,9 @@ def main():
         fail(f"{APPROVED_LICENSE_ID} not present in repository metadata")
     digest = hashlib.sha1(
         normalize(license_texts[APPROVED_LICENSE_ID]).encode()).hexdigest()
-    if digest != APPROVED_SHA1:
+    if digest != PINNED_SHA1:
         fail(f"license text changed: metadata hashes to {digest}, "
-             f"approved pin is {APPROVED_SHA1}. New owner approval required.")
+             f"pin is {PINNED_SHA1}. Owner re-approval required before use.")
 
     for comp in components:
         blocks = []
@@ -77,8 +83,8 @@ def main():
                 fail(f"component {comp} carries license refs {refs}, "
                      f"expected only {APPROVED_LICENSE_ID}")
         print(f"OK {comp}: stable channel, license {APPROVED_LICENSE_ID}")
-    print(f"license {APPROVED_LICENSE_ID} text matches approved pin "
-          f"{APPROVED_SHA1}")
+    print(f"license {APPROVED_LICENSE_ID} text matches the pinned hash "
+          f"{PINNED_SHA1}")
 
 
 if __name__ == "__main__":

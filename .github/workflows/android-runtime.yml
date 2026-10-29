@@ -89,15 +89,23 @@ jobs:
         # accepted. The post-check asserts no other license file exists.
         run: |
           mkdir -p "$ANDROID_HOME/licenses"
+          ls "$ANDROID_HOME/licenses" | sort > /tmp/licenses.before
           echo "a90c249c9e874a0ca1854dd16aa9827dec1430da" \
             > "$ANDROID_HOME/licenses/android-sdk-license"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
             'build-tools;37.0.0' platform-tools 'platforms;android-34' \
             emulator 'system-images;android-34;google_apis;x86_64' \
             < /dev/null 2>&1 | tee /tmp/sdk-install.log
-          test "$(ls "$ANDROID_HOME/licenses")" = "android-sdk-license" \
-            || { echo "unexpected license file appeared"; \
-                 ls -la "$ANDROID_HOME/licenses"; exit 1; }
+          ls "$ANDROID_HOME/licenses" | sort > /tmp/licenses.after
+          # Only NEWLY created license files may appear, and the only
+          # permitted new one is android-sdk-license itself. Runner
+          # images may ship other preexisting license files; those are
+          # not ours to judge and are ignored.
+          NEW=$(comm -13 /tmp/licenses.before /tmp/licenses.after)
+          for f in $NEW; do
+            test "$f" = "android-sdk-license" \
+              || { echo "unexpected license accepted: $f"; exit 1; }
+          done
       - name: Start Keycloak, Mailpit and the toolkit app
         run: |
           echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
