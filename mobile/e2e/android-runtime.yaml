@@ -20,8 +20,14 @@ appId: au.fintex.officetoolkit
     timeout: 45000
 - tapOn: "Username or email"
 - inputText: "runtime.user@example.com"
+# With the keyboard open, the password label tap does not move focus
+# (the input went into the username field) and the Sign In button sits
+# under the keyboard. Close it between fields so each tap lands on a
+# stable, visible target.
+- hideKeyboard
 - tapOn: "Password"
 - inputText: "runtime-pass-123"
+- hideKeyboard
 - tapOn: "Sign In"
 - extendedWaitUntil:
     visible: "PDF to JPEG"

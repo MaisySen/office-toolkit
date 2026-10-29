@@ -111,7 +111,7 @@ jobs:
           # Bundle once here so the app launch does not pay the full
           # bundling cost on the UI thread while Maestro watches.
           curl -sf --max-time 300 \
-            'http://127.0.0.1:8081/.expo/.virtual-metro-entry.bundle?platform=ios&dev=true&minify=false' \
+            'http://127.0.0.1:8081/.expo/.virtual-metro-entry.bundle?platform=ios&dev=true&hot=false&lazy=true&minify=false&transform.engine=hermes&transform.bytecode=1&unstable_transformProfile=hermes-stable' \
             -o /dev/null || { tail -40 /tmp/metro.log; exit 1; }
       - name: Install Maestro
         run: |

@@ -6,7 +6,11 @@ appId: au.fintex.officetoolkit
 # in the Keycloak journey.
 - launchApp:
     clearState: true
-- assertVisible: "Sign in"
+# A cold Metro cache leaves the debug build at "Bundling 99%" past the
+# default assert timeout; give the first screen a long, explicit wait.
+- extendedWaitUntil:
+    visible: "Sign in"
+    timeout: 120000
 - takeScreenshot: sign-in-screen
 - tapOn: "Sign in"
 # iOS shows the "Wants to Use localhost to Sign In" consent sheet on
@@ -21,8 +25,11 @@ appId: au.fintex.officetoolkit
     timeout: 30000
 - tapOn: "Username or email"
 - inputText: "runtime.user@example.com"
+# Same keyboard-covers-form fix as the Android flow.
+- hideKeyboard
 - tapOn: "Password"
 - inputText: "runtime-pass-123"
+- hideKeyboard
 - tapOn: "Sign In"
 # Back in the app, the authenticated operation list comes from the live
 # API over the bearer token the session just minted.
