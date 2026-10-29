@@ -113,11 +113,13 @@ jobs:
       - name: Start Keycloak, Mailpit and the toolkit app
         timeout-minutes: 10
         run: |
-          echo "127.0.0.1 10.0.2.2" | sudo tee -a /etc/hosts
-          # No --hostname override: KC 26 derives the issuer from the
-          # request Host, so the app (reaching KC as 10.0.2.2:8080 via the
-          # hosts mapping) receives tokens with exactly the issuer the
-          # toolkit API pins, while runner-side tooling uses localhost.
+          # 10.0.2.2 is a numeric IP: /etc/hosts only maps NAMES, so a
+          # hosts entry can never make it local. Bind it to loopback
+          # instead, so runner-side tooling (issuer check, the toolkit
+          # app's OIDC discovery) can use the exact URL the emulator app
+          # will use, and KC derives the same issuer from the request
+          # host either way.
+          sudo ip addr add 10.0.2.2/32 dev lo || true
           KC_BOOTSTRAP_ADMIN_USERNAME=admin \
           KC_BOOTSTRAP_ADMIN_PASSWORD=admin \
           /tmp/keycloak-26.8.1/bin/kc.sh start-dev --http-port 8080 \
