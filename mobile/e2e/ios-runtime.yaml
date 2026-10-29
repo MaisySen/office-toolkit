@@ -80,17 +80,19 @@ appId: au.fintex.officetoolkit
     timeout: 5000
 - runFlow:
     when:
-      notVisible: "runtime-sample.pdf"
+      notVisible: "runtime-sample.*"
     commands:
       - extendedWaitUntil:
           visible: "On My iPhone"
           timeout: 15000
       - tapOn: "On My iPhone"
+# The iOS 26 Files grid hides extensions and labels the sample
+# "runtime-sample"; match with or without the extension.
 - extendedWaitUntil:
-    visible: "runtime-sample.pdf"
+    visible: "runtime-sample.*"
     timeout: 15000
 - takeScreenshot: picker-files
-- tapOn: "runtime-sample.pdf"
+- tapOn: "runtime-sample.*"
 # The app runs the operation server-side, writes the result ZIP and
 # shows its own result line with a Share button. Maestro matches text
 # as a full regular expression, so the pattern covers the file name.
