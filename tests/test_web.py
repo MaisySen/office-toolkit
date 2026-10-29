@@ -18,7 +18,19 @@ def client(tmp_path, monkeypatch):
     c = app.test_client()
     store.register("user@example.com", "correct horse")
     # client registered only so OAuth-using tests share the same store shape
-    c.post("/login", data={"email": "user@example.com", "password": "correct horse"})
+    c.get("/login")
+    with c.session_transaction() as s:
+        s["_csrf"] = "test-csrf"
+    c.post("/login", data={"email": "user@example.com", "password": "correct horse",
+                           "_csrf": "test-csrf"})
+    with c.session_transaction() as s:
+        token = s["_csrf"]  # fresh token issued in the post-login session
+    _orig_post = c.post
+    def _post(url, **kw):
+        if url.startswith("/run/") and isinstance(kw.get("data"), dict):
+            kw["data"].setdefault("_csrf", token)
+        return _orig_post(url, **kw)
+    c.post = _post
     return c
 
 

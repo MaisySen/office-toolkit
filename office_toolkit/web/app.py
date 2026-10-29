@@ -129,8 +129,8 @@ def csrf_ok() -> bool:
     if request.path == "/oauth/token":
         return True
     import hmac as _hmac
-    return _hmac.compare_digest(request.form.get("_csrf", ""),
-                                flask_session.get("_csrf", ""))
+    token = flask_session.get("_csrf", "")
+    return bool(token) and _hmac.compare_digest(request.form.get("_csrf", ""), token)
 
 
 def require_user():
@@ -391,6 +391,7 @@ def register():
             return render_template("auth.html", mode="register", error=str(e), disabled=None), 400
         flask_session.clear()  # session fixation: fresh session on privilege change
         flask_session["sid"] = auth_store.create_web_session(uid)
+        flask_session["_csrf"] = secrets.token_urlsafe(24)
         return flask_redirect("/")
     return render_template("auth.html", mode="register", error=None, disabled=None,
                            bootstrap=(not REGISTRATION_OPEN and user_count == 0))
@@ -409,6 +410,7 @@ def login():
             return render_template("auth.html", mode="login", error=str(e), disabled=None), 400
         flask_session.clear()  # session fixation: fresh session on privilege change
         flask_session["sid"] = auth_store.create_web_session(uid)
+        flask_session["_csrf"] = secrets.token_urlsafe(24)
         nxt = request.args.get("next") or request.form.get("next") or "/"
         if not nxt.startswith("/"):
             nxt = "/"
