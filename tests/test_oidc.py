@@ -15,6 +15,16 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
+def post_logout(client):
+    """Sign out the way the UI does: a POST carrying the session's CSRF token."""
+    with client.session_transaction() as s:
+        token = s.get("_csrf") or "logout-csrf"
+        s["_csrf"] = token
+    rv = client.post("/logout", data={"_csrf": token})
+    assert rv.status_code == 302 and rv.headers["Location"] == "/login"
+    return rv
+
+
 def _b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
@@ -207,7 +217,7 @@ def test_full_oidc_login_creates_sso_account(oidc_app, idp):
                            ("sso-user@example.com",)).fetchone()
     assert row["provider"].startswith("oidc:")
     # SSO mode disables the local password route outright: no fallback
-    client.get("/logout")
+    post_logout(client)
     rv = client.post("/login", data={"email": "sso-user@example.com",
                                      "password": "whatever123",
                                      "_csrf": "pw-csrf"})
@@ -287,7 +297,7 @@ def test_same_subject_new_email_signs_into_same_account(oidc_app, idp):
     assert run_login(client).status_code == 302
     uid1 = store.db.execute("SELECT id FROM users WHERE email=?",
                             ("sso-user@example.com",)).fetchone()["id"]
-    client.get("/logout")
+    post_logout(client)
     idp.email = "renamed@example.com"
     assert run_login(client).status_code == 302
     row = store.db.execute("SELECT id, email FROM users WHERE provider LIKE 'oidc:%' "
@@ -299,7 +309,7 @@ def test_same_subject_new_email_signs_into_same_account(oidc_app, idp):
 def test_email_reassigned_to_new_subject_refused(oidc_app, idp):
     client, store = oidc_app
     assert run_login(client).status_code == 302
-    client.get("/logout")
+    post_logout(client)
     idp.sub = "a-different-person"
     rv = run_login(client)
     assert rv.status_code == 400 and b"different sign-in identity" in rv.data

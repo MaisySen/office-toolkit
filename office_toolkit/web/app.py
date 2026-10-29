@@ -187,7 +187,7 @@ def save_upload(field, d, required=True, kind=None):
 
 def page():
     return render_template("index.html", ops=OPS, ocr_langs=pdfops.list_ocr_languages(),
-                           user_email=auth_store.user_email(flask_session.get("user_id")))
+                           user_email=auth_store.user_email(current_user_id()))
 
 
 def current_user_id():
@@ -636,8 +636,18 @@ def login():
                            next=request.args.get("next", "/"))
 
 
-@app.get("/logout")
+@app.route("/logout", methods=["GET", "POST"])
 def logout():
+    # Signing out changes state, so it is a POST carrying the CSRF token.
+    # A GET only shows the confirm button: a cross-site link or image
+    # pointing here can no longer end someone's session.
+    if request.method == "GET":
+        return render_template("auth.html", mode="logout", error=None,
+                               disabled=None)
+    if not csrf_ok():
+        return render_template("auth.html", mode="logout",
+                               error="Form expired. Try again.",
+                               disabled=None), 400
     auth_store.drop_web_session(flask_session.get("sid"))
     flask_session.clear()
     return flask_redirect("/login")

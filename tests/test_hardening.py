@@ -67,3 +67,53 @@ def test_live_session_survives_purge(tmp_path):
     first = store.create_web_session(uid)
     store.create_web_session(uid)
     assert store.web_session_user(first) == uid
+
+
+# --------------------------------------------------- 2. POST-only logout
+
+@pytest.fixture
+def signed_in(tmp_path, monkeypatch):
+    from office_toolkit.web import app as webapp
+    store = AuthStore(str(tmp_path / "auth.db"))
+    monkeypatch.setattr(webapp, "auth_store", store)
+    webapp.app.config["TESTING"] = True
+    store.register("out@example.com", "correct horse")
+    c = webapp.app.test_client()
+    with c.session_transaction() as s:
+        s["_csrf"] = "pre-login"
+    c.post("/login", data={"email": "out@example.com",
+                           "password": "correct horse", "_csrf": "pre-login"})
+    with c.session_transaction() as s:
+        token = s["_csrf"]
+    assert c.get("/api/me").status_code == 200
+    return c, token
+
+
+def test_logout_get_does_not_sign_out(signed_in):
+    c, _ = signed_in
+    rv = c.get("/logout")
+    assert rv.status_code == 200
+    html = rv.get_data(as_text=True)
+    assert 'method="post"' in html and 'action="/logout"' in html
+    assert c.get("/api/me").status_code == 200  # still signed in
+
+
+def test_logout_post_without_csrf_is_refused(signed_in):
+    c, _ = signed_in
+    assert c.post("/logout", data={}).status_code == 400
+    assert c.post("/logout", data={"_csrf": "forged"}).status_code == 400
+    assert c.get("/api/me").status_code == 200  # still signed in
+
+
+def test_logout_post_with_csrf_signs_out(signed_in):
+    c, token = signed_in
+    rv = c.post("/logout", data={"_csrf": token})
+    assert rv.status_code == 302 and rv.headers["Location"] == "/login"
+    assert c.get("/api/me").status_code == 401  # signed out
+
+
+def test_index_signs_out_with_a_form(signed_in):
+    c, _ = signed_in
+    html = c.get("/").get_data(as_text=True)
+    assert 'href="/logout"' not in html
+    assert 'action="/logout"' in html

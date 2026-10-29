@@ -41,7 +41,7 @@
 <header>
   <h1>Office Toolkit</h1>
   <p>Files are uploaded to this server, processed here, and temporary copies are targeted for deletion within 30 minutes. They are not sent to any third-party service.</p>
-  {% if user_email %}<p style="font-size:12.5px">Signed in as {{ user_email }} - <a style="color:#93c5fd" href="/logout">Sign out</a></p>{% endif %}
+  {% if user_email %}<form method="post" action="/logout" style="font-size:12.5px; margin:0"><input type="hidden" name="_csrf" value="{{ csrf_token() }}">Signed in as {{ user_email }} - <button style="background:none; border:0; padding:0; color:#93c5fd; text-decoration:underline; cursor:pointer; font:inherit">Sign out</button></form>{% endif %}
 </header>
 <main>
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
