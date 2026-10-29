@@ -28,11 +28,14 @@ appId: au.fintex.officetoolkit
     timeout: 90000
 - tapOn: "Username or email"
 - inputText: "runtime.user@example.com"
-# Same keyboard-covers-form fix as the Android flow.
-- hideKeyboard
+# Same keyboard-covers-form fix as the Android flow, but simulators
+# with a hardware keyboard show nothing to hide, so tolerate that.
+- hideKeyboard:
+    optional: true
 - tapOn: "Password"
 - inputText: "runtime-pass-123"
-- hideKeyboard
+- hideKeyboard:
+    optional: true
 # The realm header pushes the button below the fold on small screens;
 # text lookup fails until it is scrolled into view.
 - scrollUntilVisible:

@@ -68,13 +68,10 @@ appId: au.fintex.officetoolkit
     timeout: 15000
 - takeScreenshot: picker-downloads
 - tapOn: "runtime-sample.pdf"
-# The app runs the operation server-side, writes the JPEG and opens
-# the system share sheet; dismiss it to reveal the result line.
-- extendedWaitUntil:
-    visible: "Share"
-    timeout: 120000
-- back
+# The app runs the operation server-side, writes the JPEG, shows its
+# own result line and offers the system share sheet. The chooser has
+# no stable title text on new Android, so wait on the result line.
 - extendedWaitUntil:
     visible: "Done:"
-    timeout: 30000
+    timeout: 120000
 - takeScreenshot: operation-result

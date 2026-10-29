@@ -78,10 +78,10 @@ export default function App() {
       await FileSystem.writeAsStringAsync(out, base64, {
         encoding: FileSystem.EncodingType.Base64,
       });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(out);
-      }
       setResult(`Done: ${filename}`);
+      if (await Sharing.isAvailableAsync()) {
+        Sharing.shareAsync(out).catch(() => {});
+      }
     } catch (e) {
       if (e instanceof AuthError) await onAuthExpired();
       else setError(e instanceof Error ? e.message : String(e));
