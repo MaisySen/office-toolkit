@@ -152,13 +152,18 @@ jobs:
           PUBLIC_ISSUER=http://10.0.2.2:8080/realms/office-toolkit \
             python3 scripts/ci_runtime_stack.py \
             || { tail -60 /tmp/kc.log; exit 1; }
+      - name: Install JS dependencies
+        working-directory: mobile
+        run: npm ci
       - name: Start Metro and warm the android bundle
         timeout-minutes: 8
         working-directory: mobile
         env:
           CI: 1
         run: |
-          nohup npx react-native start --host 0.0.0.0 --port 8081 \
+          # react-native 0.76's cli.js is a deprecation shim without the
+          # start command; the Expo CLI owns Metro in this project.
+          nohup npx expo start --host lan --port 8081 \
             > /tmp/metro.log 2>&1 &
           for i in $(seq 1 45); do
             curl -sf --max-time 5 http://127.0.0.1:8081/status \
