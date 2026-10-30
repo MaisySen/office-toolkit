@@ -3,10 +3,11 @@
   "method": "POST",
   "path_qs": "/internal/v1/jobs?op=merge",
   "ts": "1793318400",
+  "nonce": "0123456789abcdef01234567",
   "ws": "ws_test",
   "user": "usr_test",
   "max_bytes": "20971520",
   "content_length": "1234",
-  "signature": "3a8f1792384807f7e29f41bc19303929b794a5e3d70cf75e8b0784f6c982aa2a",
-  "canonical": "v1\nPOST\n/internal/v1/jobs?op=merge\n1793318400\nws_test\nusr_test\n20971520\n1234"
+  "canonical": "v1\nPOST\n/internal/v1/jobs?op=merge\n1793318400\n0123456789abcdef01234567\nws_test\nusr_test\n20971520\n1234",
+  "signature": "6fd6fd83e8b94cbcc4b9086aa15a1927b6a1415d80a004ed8a38ff0a293767f0"
 }

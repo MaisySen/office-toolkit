@@ -7,6 +7,7 @@ ends; outputs are deleted OUTPUT_TTL_SECONDS after they are made.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -82,45 +83,90 @@ class Job:
 
 ROOT = os.environ.get("TOOLKIT_ENGINE_DIR",
                       os.path.join(tempfile.gettempdir(), "toolkit-engine-jobs"))
+# Jobs are kept as a small job.json in each job directory, so every server
+# process (gunicorn runs several) sees the same jobs. _jobs is this process's
+# view, refreshed from disk on every read.
 _jobs: dict[str, Job] = {}
 _lock = threading.Lock()
 _pool = ThreadPoolExecutor(max_workers=POOL_SIZE, thread_name_prefix="engine")
 # Tests can set this to run jobs inline (deterministic).
 run_inline = False
+# A job still "running" this long after it was made lost its process.
+STALE_RUNNING_SECONDS = 15 * 60
+_ID_OK = set("0123456789abcdef")
 
 
 def engine_only() -> bool:
     return os.environ.get("TOOLKIT_ENGINE_ONLY", "") == "1"
 
 
+def _save(job: Job) -> None:
+    if not os.path.isdir(job.dir):
+        return
+    data = {k: getattr(job, k) for k in ("id", "op", "workspace", "user", "status", "error",
+                                         "output", "output_name", "output_bytes",
+                                         "created_at", "finished_at")}
+    tmp = os.path.join(job.dir, f".job.{os.getpid()}.{threading.get_ident()}.tmp")
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, os.path.join(job.dir, "job.json"))
+
+
+def _load(jid: str) -> Job | None:
+    if len(jid) != 32 or not set(jid) <= _ID_OK:
+        return None
+    d = os.path.join(ROOT, jid)
+    try:
+        with open(os.path.join(d, "job.json")) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return _jobs.get(jid)
+    return Job(dir=d, **data)
+
+
+def _all_jobs() -> list[Job]:
+    seen = {}
+    if os.path.isdir(ROOT):
+        for name in os.listdir(ROOT):
+            j = _load(name)
+            if j:
+                seen[j.id] = j
+    for jid, j in _jobs.items():  # in memory only (tests that seed jobs)
+        seen.setdefault(jid, j)
+    return list(seen.values())
+
+
 def _active(ws: str | None = None) -> int:
-    return sum(1 for j in _jobs.values() if j.status in ("queued", "running")
+    return sum(1 for j in _all_jobs() if j.status in ("queued", "running")
                and (ws is None or j.workspace == ws))
 
 
 def sweep() -> int:
-    """Delete expired outputs and forget their jobs. Returns how many went."""
+    """Delete expired outputs and their jobs; fail jobs whose process died. Returns how many went."""
     t = now()
-    gone = []
-    with _lock:
-        for jid, j in list(_jobs.items()):
-            exp = j.expires_at()
-            if exp is not None and exp <= t:
-                gone.append(j)
-                del _jobs[jid]
-    for j in gone:
-        shutil.rmtree(j.dir, ignore_errors=True)
-    if os.path.isdir(ROOT):  # orphans from an earlier process
-        known = {j.dir for j in _jobs.values()}
+    gone = 0
+    for j in _all_jobs():
+        exp = j.expires_at()
+        if exp is not None and exp <= t:
+            shutil.rmtree(j.dir, ignore_errors=True)
+            _jobs.pop(j.id, None)
+            gone += 1
+        elif j.status in ("queued", "running") and j.created_at < t - STALE_RUNNING_SECONDS:
+            j.status, j.error, j.finished_at = "failed", "The file took too long to process.", t
+            shutil.rmtree(os.path.join(j.dir, "in"), ignore_errors=True)
+            _save(j)
+    if os.path.isdir(ROOT):  # directories without a job file, from an earlier process
         for name in os.listdir(ROOT):
             p = os.path.join(ROOT, name)
-            if p not in known and os.path.getmtime(p) < t - OUTPUT_TTL_SECONDS:
+            if (os.path.isdir(p) and not os.path.exists(os.path.join(p, "job.json"))
+                    and name not in _jobs and os.path.getmtime(p) < t - OUTPUT_TTL_SECONDS):
                 shutil.rmtree(p, ignore_errors=True)
-    return len(gone)
+    return gone
 
 
 def _process(job: Job, inputs: list[str]) -> None:
     job.status = "running"
+    _save(job)
     op = OPERATIONS[job.op]
     out = os.path.join(job.dir, "out", op.output_name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -146,6 +192,7 @@ def _process(job: Job, inputs: list[str]) -> None:
         job.finished_at = now()
         if job.status == "failed":
             shutil.rmtree(os.path.join(job.dir, "out"), ignore_errors=True)
+        _save(job)
 
 
 bp = Blueprint("engine", __name__)
@@ -217,8 +264,7 @@ def create_job():
         shutil.rmtree(d, ignore_errors=True)
         return _err("bad_file", str(e), 400)
     job = Job(id=jid, op=op.slug, workspace=c.workspace, user=c.user, dir=d)
-    with _lock:
-        _jobs[jid] = job
+    _save(job)
     if run_inline:
         _process(job, inputs)
     else:
@@ -228,7 +274,7 @@ def create_job():
 
 def _owned(jid: str, c: service_auth.Caller) -> Job:
     sweep()
-    job = _jobs.get(jid)
+    job = _load(jid)
     if not job or job.workspace != c.workspace:
         abort(404)
     return job
@@ -251,8 +297,7 @@ def job_output(jid):
 @bp.delete("/internal/v1/jobs/<jid>")
 def job_delete(jid):
     job = _owned(jid, caller())
-    with _lock:
-        _jobs.pop(jid, None)
+    _jobs.pop(jid, None)
     shutil.rmtree(job.dir, ignore_errors=True)
     return "", 204
 
