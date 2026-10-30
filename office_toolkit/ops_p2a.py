@@ -634,7 +634,7 @@ def _unicode_appearances(w, values: dict, flatten: bool) -> None:
             multiline = bool(_field_flags(a) & 4096)
             size = _da_size(a)
             if flatten:
-                overlay.append((rx, ry, rw, rh, v, size, multiline))
+                overlay.append((rx, ry, rw, rh, v, size, multiline, _look(a)))
                 continue
             buf = io.BytesIO()
             c = rl_canvas.Canvas(buf, pagesize=(rw, rh))
