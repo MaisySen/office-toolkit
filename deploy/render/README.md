@@ -20,5 +20,11 @@ TOOLKIT_BOOTSTRAP_TOKEN, DOCTOOL_PROXY_SECRET, DOCTOOL_STATE_KEY, HF_TOKEN.
 Plain settings: DOCTOOL_STATE_REPO, PUBLIC_HOSTNAME, GUNICORN_WORKERS.
 Worker secret: PROXY_SECRET (same value as DOCTOOL_PROXY_SECRET).
 
+Engine mode for Multies: TOOLKIT_SERVICE_KEYS (a JSON map of key id to
+secret, ids stg-1 and prod-1) turns on the signed internal job API under
+/internal/v1, and TOOLKIT_ENGINE_ONLY=1 makes every other route answer 404
+(web pages, local accounts, OAuth, /api/run). Multies signs each call; see
+office_toolkit/web/service_auth.py and office_toolkit/web/engine.py.
+
 Next steps: Keycloak (needs a host with more memory), SMTP for account mail,
 and a paid or self hosted box once traffic needs no cold starts.
