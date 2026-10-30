@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import zipfile
 import shutil
 import tempfile
 import threading
@@ -35,21 +37,151 @@ now = time.time
 
 
 @dataclass(frozen=True)
+class Option:
+    """One setting a tool takes, sent as a multipart field beside the files.
+
+    kind: text, password, choice, int, ranges (1-3,5) or phrases (one per
+    line). The caller builds its options sheet from these."""
+    name: str
+    kind: str
+    label: str
+    required: bool = False
+    default: str | int | None = None
+    choices: tuple[str, ...] = ()
+    min: int | None = None
+    max: int | None = None
+    max_len: int = 200
+
+    def public(self) -> dict:
+        out = {"name": self.name, "kind": self.kind, "label": self.label,
+               "required": self.required}
+        if self.default is not None:
+            out["default"] = self.default
+        if self.choices:
+            out["choices"] = list(self.choices)
+        if self.min is not None:
+            out["min"] = self.min
+        if self.max is not None:
+            out["max"] = self.max
+        if self.kind in ("text", "password", "ranges", "phrases"):
+            out["max_len"] = self.max_len
+        return out
+
+
+PDF = "application/pdf"
+ZIP = "application/zip"
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+OCR_MAX_PAGES = 30
+OCR_MAX_BYTES = 20 * 1024 * 1024
+JPEG_MAX_PAGES = 100
+MAX_IMAGES = 50
+
+
+@dataclass(frozen=True)
 class Operation:
     slug: str
     label: str
-    kind: str          # pdf or office
+    kind: str          # pdf, office or image
     min_files: int
     max_files: int
     output_name: str
-    content_type: str = "application/pdf"
+    content_type: str = PDF
+    options: tuple[Option, ...] = ()
+    max_pages: int | None = None   # tighter than the engine wide page cap
+    max_bytes: int | None = None   # tighter than the caller's plan cap
+    slow: bool = False             # reports page by page progress
 
 
+_RANGES = Option("ranges", "ranges", "Pages", max_len=200)
 OPERATIONS = {
     "compress": Operation("compress", "Compress PDF", "pdf", 1, 1, "compressed.pdf"),
     "merge": Operation("merge", "Merge PDFs", "pdf", 2, MAX_FILES, "merged.pdf"),
     "convert": Operation("convert", "Convert to PDF", "office", 1, 1, "converted.pdf"),
+    "to-jpeg": Operation("to-jpeg", "PDF to images", "pdf", 1, 1, "pages.zip", ZIP,
+                         (Option("dpi", "choice", "Quality", default="150",
+                                 choices=("72", "150", "300")),),
+                         max_pages=JPEG_MAX_PAGES, slow=True),
+    "images-to-pdf": Operation("images-to-pdf", "Images to PDF", "image", 1, MAX_IMAGES,
+                               "images.pdf"),
+    "split": Operation("split", "Split PDF", "pdf", 1, 1, "split.zip", ZIP,
+                       (Option("ranges", "ranges", "Pages for each part", required=True),)),
+    "rotate": Operation("rotate", "Rotate pages", "pdf", 1, 1, "rotated.pdf", PDF,
+                        (Option("angle", "choice", "Turn", default="90",
+                                choices=("90", "180", "270")), _RANGES)),
+    "scrub": Operation("scrub", "Remove metadata", "pdf", 1, 1, "cleaned.pdf"),
+    "ocr": Operation("ocr", "Make searchable (OCR)", "pdf", 1, 1, "searchable.pdf", PDF,
+                     (Option("language", "choice", "Language", default="eng",
+                             choices=("eng",)),),
+                     max_pages=OCR_MAX_PAGES, max_bytes=OCR_MAX_BYTES, slow=True),
+    "redact": Operation("redact", "Redact text", "pdf", 1, 1, "redacted.pdf", PDF,
+                        (Option("phrases", "phrases", "Words or phrases to black out",
+                                required=True, max_len=2000),)),
+    "watermark": Operation("watermark", "Watermark", "pdf", 1, 1, "watermarked.pdf", PDF,
+                           (Option("text", "text", "Watermark text", required=True,
+                                   max_len=80),
+                            Option("opacity", "int", "Strength (percent)", default=25,
+                                   min=10, max=60))),
+    "unlock": Operation("unlock", "Remove password", "pdf", 1, 1, "unlocked.pdf", PDF,
+                        (Option("password", "password", "Current password", required=True,
+                                max_len=128),)),
+    "pdf-to-docx": Operation("pdf-to-docx", "PDF to Word", "pdf", 1, 1, "document.docx",
+                             DOCX),
 }
+_RANGES_RE = re.compile(r"^\s*\d{1,4}(\s*-\s*\d{1,4})?(\s*,\s*\d{1,4}(\s*-\s*\d{1,4})?){0,99}\s*$")
+_IMAGE_EXT = (".jpg", ".jpeg", ".png")
+
+
+def parse_options(op: Operation, form) -> dict:
+    """Checks the tool's settings; raises ToolkitError with a plain message."""
+    out: dict = {}
+    for o in op.options:
+        raw = form.get(o.name)
+        raw = raw if raw is not None and str(raw).strip() != "" else None
+        if raw is None:
+            if o.required:
+                raise ToolkitError(f"{o.label} is required.")
+            out[o.name] = o.default
+            continue
+        raw = str(raw)
+        if o.kind in ("text", "password", "ranges", "phrases") and len(raw) > o.max_len:
+            raise ToolkitError(f"{o.label} is too long.")
+        if o.kind == "choice":
+            if raw not in o.choices:
+                raise ToolkitError(f"{o.label} must be one of {', '.join(o.choices)}.")
+            out[o.name] = raw
+        elif o.kind == "int":
+            try:
+                v = int(raw)
+            except ValueError:
+                raise ToolkitError(f"{o.label} must be a whole number.")
+            if (o.min is not None and v < o.min) or (o.max is not None and v > o.max):
+                raise ToolkitError(f"{o.label} must be between {o.min} and {o.max}.")
+            out[o.name] = v
+        elif o.kind == "ranges":
+            if not _RANGES_RE.match(raw):
+                raise ToolkitError(f"{o.label}: use page numbers and ranges like 1-3, 5.")
+            out[o.name] = raw.replace(" ", "")
+        elif o.kind == "phrases":
+            items = [p.strip() for p in raw.splitlines() if p.strip()]
+            if not items:
+                raise ToolkitError(f"{o.label} is required.")
+            if len(items) > 20:
+                raise ToolkitError("Up to 20 words or phrases at a time.")
+            out[o.name] = items
+        elif o.kind == "password":
+            out[o.name] = raw
+        else:
+            out[o.name] = raw.strip()
+    return out
+
+
+def _count_pages(path: str) -> int:
+    from pypdf import PdfReader
+    try:
+        r = PdfReader(path)
+        return 0 if r.is_encrypted else len(r.pages)
+    except Exception:
+        raise ToolkitError("The PDF could not be parsed (corrupt or unsupported).")
 
 
 @dataclass
@@ -64,6 +196,8 @@ class Job:
     output: str | None = None
     output_name: str | None = None
     output_bytes: int = 0
+    result: dict = field(default_factory=dict)
+    progress: dict | None = None
     created_at: float = field(default_factory=lambda: now())
     finished_at: float | None = None
 
@@ -74,6 +208,10 @@ class Job:
         out = {"id": self.id, "op": self.op, "status": self.status}
         if self.error:
             out["error"] = self.error
+        if self.progress and self.status in ("queued", "running"):
+            out["progress"] = self.progress
+        if self.result and self.status == "done":
+            out["result"] = self.result
         if self.status == "done":
             out["output"] = {"name": self.output_name, "bytes": self.output_bytes,
                              "content_type": OPERATIONS[self.op].content_type}
@@ -105,7 +243,7 @@ def _save(job: Job) -> None:
         return
     data = {k: getattr(job, k) for k in ("id", "op", "workspace", "user", "status", "error",
                                          "output", "output_name", "output_bytes",
-                                         "created_at", "finished_at")}
+                                         "result", "progress", "created_at", "finished_at")}
     tmp = os.path.join(job.dir, f".job.{os.getpid()}.{threading.get_ident()}.tmp")
     with open(tmp, "w") as fh:
         json.dump(data, fh)
@@ -164,21 +302,81 @@ def sweep() -> int:
     return gone
 
 
-def _process(job: Job, inputs: list[str]) -> None:
+def _zip(paths: list[str], out: str) -> None:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in paths:
+            z.write(p, os.path.basename(p))
+
+
+def _progress(job: Job, done: int, total: int) -> None:
+    job.progress = {"done": done, "total": total}
+    _save(job)
+
+
+def _run_op(job: Job, inputs: list[str], opts: dict, out: str) -> dict:
+    """Runs one tool. Returns small facts about the result (never file names)."""
+    work = os.path.join(job.dir, "work")
+    os.makedirs(work, exist_ok=True)
+    op = job.op
+    if op == "compress":
+        pdfops.compress_pdf(inputs[0], out)
+        return {}
+    if op == "merge":
+        return {"pages": pdfops.merge_pdfs(inputs, out)}
+    if op == "convert":
+        made = pdfops.office_to_pdf(inputs[0], os.path.dirname(out))
+        if made != out:
+            os.replace(made, out)
+        return {}
+    if op == "to-jpeg":
+        total = _count_pages(inputs[0])
+        _progress(job, 0, total)
+        pages = pdfops.pdf_to_jpeg(inputs[0], work, dpi=int(opts["dpi"]), base="page",
+                                   on_page=lambda i: _progress(job, i, total))
+        _zip(pages, out)
+        return {"pages": len(pages)}
+    if op == "images-to-pdf":
+        return {"pages": pdfops.images_to_pdf(inputs, out)}
+    if op == "split":
+        parts = pdfops.split_pdf(inputs[0], opts["ranges"], work, base="part")
+        _zip(parts, out)
+        return {"parts": len(parts)}
+    if op == "rotate":
+        pdfops.rotate_pdf(inputs[0], out, int(opts["angle"]), opts.get("ranges"))
+        return {}
+    if op == "scrub":
+        pdfops.scrub_metadata(inputs[0], out)
+        return {}
+    if op == "ocr":
+        total = _count_pages(inputs[0])
+        _progress(job, 0, total)
+        pdfops.ocr_pdf(inputs[0], out, language=opts["language"],
+                       on_page=lambda i: _progress(job, i, total))
+        return {"pages": total}
+    if op == "redact":
+        found = pdfops.redact_phrases(inputs[0], out, opts["phrases"])
+        return {"matches": found["matches"], "phrases": len(opts["phrases"]),
+                "verified": True, "pages_changed": found["pages_rasterised"]}
+    if op == "watermark":
+        pdfops.watermark_pdf(inputs[0], out, text=opts["text"],
+                             opacity=opts["opacity"] / 100)
+        return {}
+    if op == "unlock":
+        pdfops.remove_password(inputs[0], out, opts["password"])
+        return {}
+    if op == "pdf-to-docx":
+        return {"pages_with_text": pdfops.pdf_to_docx_text(inputs[0], out)}
+    raise ToolkitError("That tool is not available.")
+
+
+def _process(job: Job, inputs: list[str], opts: dict | None = None) -> None:
     job.status = "running"
     _save(job)
     op = OPERATIONS[job.op]
     out = os.path.join(job.dir, "out", op.output_name)
     os.makedirs(os.path.dirname(out), exist_ok=True)
     try:
-        if job.op == "compress":
-            pdfops.compress_pdf(inputs[0], out)
-        elif job.op == "merge":
-            pdfops.merge_pdfs(inputs, out)
-        elif job.op == "convert":
-            made = pdfops.office_to_pdf(inputs[0], os.path.dirname(out))
-            if made != out:
-                os.replace(made, out)
+        job.result = _run_op(job, inputs, opts or {}, out)
         job.output = out
         job.output_bytes = os.path.getsize(out)
         job.output_name = op.output_name
@@ -188,7 +386,10 @@ def _process(job: Job, inputs: list[str]) -> None:
     except Exception:  # never leak internals to the caller
         job.status, job.error = "failed", "The file could not be processed."
     finally:
+        opts = None  # the password, if any, is not kept
         shutil.rmtree(os.path.join(job.dir, "in"), ignore_errors=True)
+        shutil.rmtree(os.path.join(job.dir, "work"), ignore_errors=True)
+        job.progress = None
         job.finished_at = now()
         if job.status == "failed":
             shutil.rmtree(os.path.join(job.dir, "out"), ignore_errors=True)
@@ -220,7 +421,10 @@ def operations():
     caller()
     return jsonify({"operations": [
         {"slug": o.slug, "label": o.label, "accepts": o.kind,
-         "min_files": o.min_files, "max_files": o.max_files}
+         "min_files": o.min_files, "max_files": o.max_files,
+         "output": {"name": o.output_name, "content_type": o.content_type},
+         "options": [x.public() for x in o.options],
+         "max_pages": o.max_pages, "max_bytes": o.max_bytes, "slow": o.slow}
         for o in OPERATIONS.values()]})
 
 
@@ -234,6 +438,8 @@ def create_job():
         return _err("length_required", "Content length is required.", 411)
     if request.content_length > c.max_bytes:
         return _err("too_large", "The upload is larger than your plan allows.", 413)
+    if op.max_bytes and request.content_length > op.max_bytes + 64 * 1024:
+        return _err("too_large", f"{op.label} takes files up to {op.max_bytes // (1024 * 1024)} MB.", 413)
     sweep()
     with _lock:
         if _active() >= QUEUE_CAP:
@@ -254,21 +460,26 @@ def create_job():
             ext = ".pdf" if op.kind == "pdf" else os.path.splitext(f.filename or "")[1].lower()
             if op.kind == "office" and ext not in (".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"):
                 raise ToolkitError("Word, Excel, PowerPoint or OpenDocument files only.")
+            if op.kind == "image" and ext not in _IMAGE_EXT:
+                raise ToolkitError("JPEG or PNG images only.")
             p = os.path.join(d, "in", f"{i:02d}{ext}")
             f.save(p)
             sniff(p, op.kind)
             if op.kind == "pdf":
                 page_count_guard(p)
+                if op.max_pages and _count_pages(p) > op.max_pages:
+                    raise ToolkitError(f"{op.label} takes PDFs up to {op.max_pages} pages.")
             inputs.append(p)
+        opts = parse_options(op, request.form)
     except ToolkitError as e:
         shutil.rmtree(d, ignore_errors=True)
         return _err("bad_file", str(e), 400)
     job = Job(id=jid, op=op.slug, workspace=c.workspace, user=c.user, dir=d)
     _save(job)
     if run_inline:
-        _process(job, inputs)
+        _process(job, inputs, opts)
     else:
-        _pool.submit(_process, job, inputs)
+        _pool.submit(_process, job, inputs, opts)
     return jsonify(job.public()), 202
 
 

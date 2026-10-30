@@ -41,17 +41,19 @@ def signed(method, path, body=b"", ws="ws_a", user="u1", max_bytes=20 * 1024 * 1
             "X-Multies-Sig": sig}
 
 
-def multipart(paths):
+def multipart(paths, fields=None):
     md = MultiDict()
     for p in paths:
         md.add("files", FileStorage(io.BytesIO(Path(p).read_bytes()),
                                     filename=os.path.basename(p)))
+    for k, v in (fields or {}).items():
+        md.add(k, v)
     boundary, data = encode_multipart(md)
     return data, f"multipart/form-data; boundary={boundary}"
 
 
-def submit(c, op, paths, **kw):
-    body, ctype = multipart(paths)
+def submit(c, op, paths, fields=None, **kw):
+    body, ctype = multipart(paths, fields)
     path = f"/internal/v1/jobs?op={op}"
     return c.post(path, data=body, content_type=ctype, headers=signed("POST", path, body, **kw))
 
@@ -78,7 +80,13 @@ def test_good_signature_lists_operations(eng):
     rv = get(eng, "/internal/v1/operations")
     assert rv.status_code == 200
     slugs = [o["slug"] for o in rv.get_json()["operations"]]
-    assert slugs == ["compress", "merge", "convert"]
+    assert slugs == ["compress", "merge", "convert", "to-jpeg", "images-to-pdf", "split",
+                     "rotate", "scrub", "ocr", "redact", "watermark", "unlock", "pdf-to-docx"]
+    ops = {o["slug"]: o for o in rv.get_json()["operations"]}
+    assert ops["ocr"]["max_pages"] == 30 and ops["ocr"]["slow"] is True
+    assert [o["name"] for o in ops["watermark"]["options"]] == ["text", "opacity"]
+    assert ops["split"]["options"][0]["required"] is True
+    assert ops["split"]["output"]["content_type"] == "application/zip"
 
 
 def test_unsigned_call_refused(eng):
@@ -219,7 +227,7 @@ def test_file_count_rules(eng, sample_pdf):
 
 
 def test_unknown_op(eng, sample_pdf):
-    rv = submit(eng, "ocr", [sample_pdf])
+    rv = submit(eng, "replace", [sample_pdf])
     assert rv.status_code == 400 and rv.get_json()["error"] == "unknown_op"
 
 
@@ -277,3 +285,145 @@ def test_failed_job_reports_plain_error(eng, tmp_path):
     broken.write_bytes(b"%PDF-1.4 not really a pdf")
     rv = submit(eng, "compress", [str(broken)])
     assert rv.status_code == 400  # page count guard rejects it before queueing
+
+
+# ---------------------------------------------------------------- P1 all tools
+
+def run(c, op, paths, fields=None):
+    rv = submit(c, op, paths, fields)
+    assert rv.status_code == 202, rv.get_json()
+    st = get(c, f"/internal/v1/jobs/{rv.get_json()['id']}").get_json()
+    return st
+
+
+def output(c, st):
+    rv = get(c, f"/internal/v1/jobs/{st['id']}/output")
+    assert rv.status_code == 200
+    return rv.data
+
+
+def test_to_jpeg_zips_one_image_per_page(eng, sample_pdf):
+    import zipfile
+    st = run(eng, "to-jpeg", [sample_pdf], {"dpi": "72"})
+    assert st["status"] == "done" and st["result"] == {"pages": 2}
+    z = zipfile.ZipFile(io.BytesIO(output(eng, st)))
+    assert sorted(z.namelist()) == ["page-p1.jpg", "page-p2.jpg"]
+    assert z.read("page-p1.jpg")[:3] == b"\xff\xd8\xff"
+
+
+def test_images_to_pdf(eng, sample_image, tmp_path):
+    from PIL import Image
+    jpg = tmp_path / "b.jpg"
+    Image.new("RGB", (300, 200), "red").save(jpg)
+    st = run(eng, "images-to-pdf", [sample_image, str(jpg)])
+    assert st["status"] == "done" and st["result"] == {"pages": 2}
+    assert len(PdfReader(io.BytesIO(output(eng, st))).pages) == 2
+
+
+def test_images_to_pdf_refuses_other_files(eng, sample_pdf):
+    assert submit(eng, "images-to-pdf", [sample_pdf]).status_code == 400
+
+
+def test_split_by_ranges(eng, sample_pdf):
+    import zipfile
+    st = run(eng, "split", [sample_pdf], {"ranges": "1, 2"})
+    assert st["status"] == "done" and st["result"] == {"parts": 2}
+    z = zipfile.ZipFile(io.BytesIO(output(eng, st)))
+    assert sorted(z.namelist()) == ["part-1.pdf", "part-2.pdf"]
+
+
+def test_split_needs_good_ranges(eng, sample_pdf):
+    assert submit(eng, "split", [sample_pdf]).status_code == 400
+    rv = submit(eng, "split", [sample_pdf], {"ranges": "one to two"})
+    assert rv.status_code == 400 and "1-3" in rv.get_json()["message"]
+    st = run(eng, "split", [sample_pdf], {"ranges": "1-9"})
+    assert st["status"] == "failed" and "outside" in st["error"]
+
+
+def test_rotate_selected_pages(eng, sample_pdf):
+    st = run(eng, "rotate", [sample_pdf], {"angle": "180", "ranges": "2"})
+    r = PdfReader(io.BytesIO(output(eng, st)))
+    assert [p.rotation for p in r.pages] == [0, 180]
+    assert submit(eng, "rotate", [sample_pdf], {"angle": "45"}).status_code == 400
+
+
+def test_scrub_removes_metadata(eng, secret_pdf):
+    st = run(eng, "scrub", [secret_pdf])
+    meta = PdfReader(io.BytesIO(output(eng, st))).metadata or {}
+    assert "SecretDoc" not in str(dict(meta))
+
+
+def test_ocr_makes_scan_searchable_with_progress_cleared(eng, scanned_pdf):
+    st = run(eng, "ocr", [scanned_pdf], {"language": "eng"})
+    assert st["status"] == "done" and st["result"] == {"pages": 1} and "progress" not in st
+    text = PdfReader(io.BytesIO(output(eng, st))).pages[0].extract_text()
+    assert "4431" in text
+
+
+def test_ocr_page_cap(eng, big_pdf):
+    rv = submit(eng, "ocr", [big_pdf])
+    assert rv.status_code == 400 and "30 pages" in rv.get_json()["message"]
+
+
+def test_ocr_size_cap_413(eng, noisy_pdf, monkeypatch):
+    monkeypatch.setitem(engine.OPERATIONS, "ocr", engine.OPERATIONS["ocr"].__class__(
+        **{**engine.OPERATIONS["ocr"].__dict__, "max_bytes": 1024 * 1024}))
+    assert os.path.getsize(noisy_pdf) > 1024 * 1024 + 64 * 1024
+    rv = submit(eng, "ocr", [noisy_pdf])
+    assert rv.status_code == 413
+
+
+def test_redact_phrases_verified_count(eng, sample_pdf):
+    st = run(eng, "redact", [sample_pdf], {"phrases": "Jane Citizen\n123 456 782"})
+    assert st["status"] == "done"
+    assert st["result"]["matches"] == 2 and st["result"]["verified"] is True
+    text = "".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(output(eng, st))).pages)
+    assert "Jane Citizen" not in text and "123 456 782" not in text
+
+
+def test_redact_refuses_scan_and_missing_text(eng, scanned_pdf, sample_pdf):
+    st = run(eng, "redact", [scanned_pdf], {"phrases": "4431"})
+    assert st["status"] == "failed" and "OCR" in st["error"]
+    st = run(eng, "redact", [sample_pdf], {"phrases": "not in here"})
+    assert st["status"] == "failed" and "were found" in st["error"]
+
+
+def test_redact_refuses_text_in_annotations(eng, annotated_pdf):
+    st = run(eng, "redact", [annotated_pdf], {"phrases": "123 456 782"})
+    assert st["status"] == "failed" and "Nothing was changed" in st["error"]
+
+
+def test_watermark_text_and_opacity_bounds(eng, sample_pdf):
+    st = run(eng, "watermark", [sample_pdf], {"text": "DRAFT", "opacity": "30"})
+    assert st["status"] == "done"
+    assert "DRAFT" in PdfReader(io.BytesIO(output(eng, st))).pages[0].extract_text()
+    assert submit(eng, "watermark", [sample_pdf], {"text": "DRAFT", "opacity": "90"}).status_code == 400
+    assert submit(eng, "watermark", [sample_pdf]).status_code == 400
+
+
+def test_unlock_with_the_password_and_password_not_kept(eng, sample_pdf, tmp_path):
+    from office_toolkit import pdfops
+    locked = tmp_path / "locked.pdf"
+    pdfops.add_password(sample_pdf, str(locked), "hunter22")
+    st = run(eng, "unlock", [str(locked)], {"password": "wrong"})
+    assert st["status"] == "failed"
+    st = run(eng, "unlock", [str(locked)], {"password": "hunter22"})
+    assert st["status"] == "done"
+    assert not PdfReader(io.BytesIO(output(eng, st))).is_encrypted
+    for root, _dirs, files in os.walk(engine.ROOT):
+        for f in files:
+            if f == "job.json":
+                assert "hunter22" not in Path(root, f).read_text()
+
+
+def test_pdf_to_docx(eng, sample_pdf):
+    from docx import Document
+    st = run(eng, "pdf-to-docx", [sample_pdf])
+    assert st["status"] == "done" and st["result"] == {"pages_with_text": 2}
+    doc = Document(io.BytesIO(output(eng, st)))
+    assert any("Invoice total" in p.text for p in doc.paragraphs)
+
+
+def test_option_too_long_refused(eng, sample_pdf):
+    rv = submit(eng, "watermark", [sample_pdf], {"text": "x" * 81})
+    assert rv.status_code == 400 and "too long" in rv.get_json()["message"]
