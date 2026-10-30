@@ -31,11 +31,12 @@ def eng(tmp_path, monkeypatch):
 
 
 def signed(method, path, body=b"", ws="ws_a", user="u1", max_bytes=20 * 1024 * 1024,
-           ts=None, key_id=KEY_ID, secret=SECRET):
+           ts=None, key_id=KEY_ID, secret=SECRET, nonce=None):
     ts = str(int(time.time()) if ts is None else ts)
-    sig = service_auth.sign(secret, method, path, ts, ws, user, str(max_bytes),
+    nonce = nonce or os.urandom(12).hex()
+    sig = service_auth.sign(secret, method, path, ts, nonce, ws, user, str(max_bytes),
                             str(len(body)))
-    return {"X-Multies-Key": key_id, "X-Multies-Ts": ts, "X-Multies-Ws": ws,
+    return {"X-Multies-Key": key_id, "X-Multies-Ts": ts, "X-Multies-Nonce": nonce, "X-Multies-Ws": ws,
             "X-Multies-User": user, "X-Multies-Max-Bytes": str(max_bytes),
             "X-Multies-Sig": sig}
 
@@ -61,10 +62,10 @@ def get(c, path, **kw):
 
 def test_shared_signing_vector_matches():
     v = VECTOR
-    assert service_auth.canonical(v["method"], v["path_qs"], v["ts"], v["ws"], v["user"],
-                                  v["max_bytes"], v["content_length"]) == v["canonical"]
-    assert service_auth.sign(v["secret"], v["method"], v["path_qs"], v["ts"], v["ws"],
-                             v["user"], v["max_bytes"], v["content_length"]) == v["signature"]
+    assert service_auth.canonical(v["method"], v["path_qs"], v["ts"], v["nonce"], v["ws"],
+                                  v["user"], v["max_bytes"], v["content_length"]) == v["canonical"]
+    assert service_auth.sign(v["secret"], v["method"], v["path_qs"], v["ts"], v["nonce"],
+                             v["ws"], v["user"], v["max_bytes"], v["content_length"]) == v["signature"]
 
 
 def test_parse_keys_formats_and_short_keys_dropped():
@@ -106,6 +107,49 @@ def test_replayed_signature_refused(eng):
     h = signed("GET", "/internal/v1/operations")
     assert eng.get("/internal/v1/operations", headers=h).status_code == 200
     assert eng.get("/internal/v1/operations", headers=h).status_code == 401
+
+
+def test_file_replay_cache_shared_across_instances(tmp_path):
+    a = service_auth.FileReplayCache(str(tmp_path / "r"))
+    b = service_auth.FileReplayCache(str(tmp_path / "r"))
+    assert a.check_and_add("sig1", 1000.0) is True
+    assert b.check_and_add("sig1", 1001.0) is False
+    assert b.check_and_add("sig2", 1001.0) is True
+
+
+def test_job_state_is_shared_through_disk(eng, sample_pdf):
+    jid = submit(eng, "compress", [sample_pdf]).get_json()["id"]
+    engine._jobs.clear()  # another process has no memory of the job
+    st = get(eng, f"/internal/v1/jobs/{jid}").get_json()
+    assert st["status"] == "done"
+    assert get(eng, f"/internal/v1/jobs/{jid}/output").status_code == 200
+
+
+def test_stale_running_job_is_failed(eng, sample_pdf, monkeypatch):
+    t0 = time.time()
+    monkeypatch.setattr(engine, "now", lambda: t0)
+    monkeypatch.setattr(engine, "run_inline", False)
+    monkeypatch.setattr(engine._pool, "submit", lambda *a, **k: None)
+    jid = submit(eng, "compress", [sample_pdf]).get_json()["id"]
+    assert get(eng, f"/internal/v1/jobs/{jid}").get_json()["status"] == "queued"
+    monkeypatch.setattr(engine, "now", lambda: t0 + engine.STALE_RUNNING_SECONDS + 1)
+    rv = get(eng, f"/internal/v1/jobs/{jid}")
+    assert rv.status_code == 200, rv.data[:300]
+    assert rv.get_json()["status"] == "failed"
+
+
+def test_bad_or_missing_nonce_refused(eng):
+    h = signed("GET", "/internal/v1/operations", nonce="short")
+    assert eng.get("/internal/v1/operations", headers=h).status_code == 401
+    h = signed("GET", "/internal/v1/operations")
+    del h["X-Multies-Nonce"]
+    assert eng.get("/internal/v1/operations", headers=h).status_code == 401
+
+
+def test_two_calls_in_one_second_are_not_replays(eng):
+    ts = int(time.time())
+    assert get(eng, "/internal/v1/operations", ts=ts).status_code == 200
+    assert get(eng, "/internal/v1/operations", ts=ts).status_code == 200
 
 
 def test_unknown_key_refused(eng):
@@ -166,7 +210,7 @@ def test_convert_job_docx_to_pdf(eng, sample_docx):
 def test_wrong_file_type_refused(eng, sample_docx):
     rv = submit(eng, "compress", [sample_docx])
     assert rv.status_code == 400 and rv.get_json()["error"] == "bad_file"
-    assert os.listdir(engine.ROOT) == []
+    assert not os.path.exists(engine.ROOT) or os.listdir(engine.ROOT) == []
 
 
 def test_file_count_rules(eng, sample_pdf):
