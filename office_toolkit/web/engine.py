@@ -58,7 +58,11 @@ OCR_LANGUAGES = ("eng", "nep", "hin", "chi_sim", "chi_tra", "ara", "vie", "ind",
 
 _RANGES = Option("ranges", "ranges", "Pages", max_len=200)
 OPERATIONS = {
-    "compress": Operation("compress", "Compress PDF", "pdf", 1, 1, "compressed.pdf"),
+    # R68b: optional level; callers that send none get "medium", which now
+    # shrinks pictures (scans) as well as the file structure.
+    "compress": Operation("compress", "Compress PDF", "pdf", 1, 1, "compressed.pdf", PDF,
+                          (Option("level", "choice", "Level", default="medium",
+                                  choices=("light", "medium", "strong")),)),
     "merge": Operation("merge", "Merge PDFs", "pdf", 2, MAX_FILES, "merged.pdf"),
     "convert": Operation("convert", "Convert to PDF", "office", 1, 1, "converted.pdf"),
     "to-jpeg": Operation("to-jpeg", "PDF to images", "pdf", 1, 1, "pages.zip", ZIP,
@@ -321,8 +325,9 @@ def _run_op(job: Job, inputs: list[str], opts: dict, out: str) -> dict:
     if op in P2_HANDLERS:
         return _run_p2(job, inputs, opts, out, work)
     if op == "compress":
-        pdfops.compress_pdf(inputs[0], out)
-        return {}
+        r = pdfops.compress_pdf(inputs[0], out, opts.get("level") or "medium")
+        return {"level": r.level, "in_bytes": r.in_bytes, "out_bytes": r.out_bytes,
+                "images_changed": r.images_changed, "already_optimised": r.already_optimised}
     if op == "merge":
         return {"pages": pdfops.merge_pdfs(inputs, out)}
     if op == "convert":

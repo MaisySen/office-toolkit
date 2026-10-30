@@ -86,6 +86,11 @@ def test_p1_listing_unchanged(eng):
             assert lang["choices"][0] == "eng" and lang["default"] == "eng"
             assert {"nep", "hin", "eng+nep", "eng+hin"} <= set(lang["choices"])
             lang["choices"] = ["eng"]
+        if w["slug"] == "compress":  # R68b added one optional level; old callers send none
+            assert got["options"] == [{"name": "level", "kind": "choice", "label": "Level",
+                                       "required": False, "default": "medium",
+                                       "choices": ["light", "medium", "strong"]}]
+            got["options"] = []
         assert got == w
 
 

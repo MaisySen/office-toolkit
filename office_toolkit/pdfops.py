@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import zlib
 from dataclasses import dataclass, field
 
 import pikepdf
@@ -106,16 +107,257 @@ def rotate_pdf(src: str, out: str, angle: int, spec: str | None = None) -> None:
 class CompressResult:
     in_bytes: int
     out_bytes: int
+    level: str = "light"
+    images_changed: int = 0
+    already_optimised: bool = False
 
     @property
     def ratio(self) -> float:
         return self.out_bytes / self.in_bytes if self.in_bytes else 1.0
 
 
-def compress_pdf(src: str, out: str) -> CompressResult:
+# Compress levels. "light" is the original lossless pass (streams and object
+# structure only). "medium" and "strong" also downsample pictures drawn above
+# the target resolution and store them again as JPEG; text and vector art are
+# never touched. Pictures that are one bit (black and white scans), masks,
+# palette images and anything Pillow cannot read are left exactly as they are.
+COMPRESS_LEVELS = {
+    "light": None,
+    "medium": {"dpi": 150, "quality": 72},
+    "strong": {"dpi": 100, "quality": 55},
+}
+_MIN_IMAGE_PIXELS = 64 * 64
+_MAX_DECODE_PIXELS = 40_000_000      # skip pictures too big to open safely (512 MB host)
+_DOWNSAMPLE_SLACK = 1.15             # only resample when clearly above target
+
+
+def _mat_mul(a, b):
+    """2D affine product a x b, matrices as (a, b, c, d, e, f)."""
+    return (a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3],
+            a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3],
+            a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5])
+
+
+def _placed_image_sizes(pdf) -> dict:
+    """objgen of each image XObject -> largest (width_pt, height_pt) it is drawn at."""
+    sizes: dict = {}
+    seen_forms: set = set()
+
+    def walk(container, resources, ctm, depth):
+        if depth > 8:
+            return
+        try:
+            xobjs = resources.get("/XObject") if resources is not None else None
+            ops = pikepdf.parse_content_stream(container)
+        except Exception:
+            return
+        stack = []
+        cur = ctm
+        for operands, op in ops:
+            name = str(op)
+            if name == "q":
+                stack.append(cur)
+            elif name == "Q":
+                cur = stack.pop() if stack else ctm
+            elif name == "cm" and len(operands) == 6:
+                try:
+                    cur = _mat_mul(tuple(float(x) for x in operands), cur)
+                except Exception:
+                    pass
+            elif name == "Do" and operands and xobjs is not None:
+                xo = xobjs.get(operands[0])
+                if xo is None:
+                    continue
+                sub = xo.get("/Subtype")
+                if sub == "/Image":
+                    w = (cur[0] ** 2 + cur[1] ** 2) ** 0.5
+                    h = (cur[2] ** 2 + cur[3] ** 2) ** 0.5
+                    key = xo.objgen
+                    pw, ph = sizes.get(key, (0.0, 0.0))
+                    sizes[key] = (max(pw, w), max(ph, h))
+                elif sub == "/Form":
+                    key = xo.objgen
+                    if key in seen_forms and depth > 0:
+                        continue
+                    seen_forms.add(key)
+                    m = xo.get("/Matrix")
+                    fm = tuple(float(x) for x in m) if m is not None and len(m) == 6 else (1, 0, 0, 1, 0, 0)
+                    walk(xo, xo.get("/Resources", resources), _mat_mul(fm, cur), depth + 1)
+
+    for page in pdf.pages:
+        try:
+            walk(page.obj, page.obj.get("/Resources"), (1, 0, 0, 1, 0, 0), 0)
+        except Exception:
+            continue
+    return sizes
+
+
+def _filters(obj) -> list:
+    f = obj.get("/Filter")
+    if f is None:
+        return []
+    return [str(x) for x in f] if isinstance(f, pikepdf.Array) else [str(f)]
+
+
+def _open_picture(obj, target_w: int, target_h: int):
+    """A Pillow image of the picture in RGB or L, or None when it should be left alone."""
+    from PIL import Image
+    filters = _filters(obj)
+    if filters == ["/DCTDecode"]:
+        im = Image.open(io.BytesIO(obj.read_raw_bytes()))
+        im.draft("RGB" if im.mode in ("RGB", "YCbCr") else im.mode, (target_w, target_h))
+        if im.mode == "CMYK":
+            return None  # Adobe inverted CMYK JPEGs are easy to get wrong; keep them
+        if im.width * im.height > _MAX_DECODE_PIXELS:
+            return None  # even reduced it is too big to open safely here
+        im.load()
+    else:
+        if int(obj.get("/Width", 0)) * int(obj.get("/Height", 0)) > _MAX_DECODE_PIXELS:
+            return None
+        im = pikepdf.PdfImage(obj).as_pil_image()
+    return im if im.mode in ("RGB", "L") else None
+
+
+def _shrink_images(pdf, dpi: int, quality: int) -> int:
+    """Downsamples and re-encodes pictures in place. Returns how many changed."""
+    from PIL import Image
+    placed = _placed_image_sizes(pdf)
+    changed = 0
+    done: set = set()
+    for page in pdf.pages:
+        try:
+            images = list(page.images.values())
+        except Exception:
+            continue
+        # images inside form XObjects are reached through the placement map
+        for obj in list(images) + [o for o in _form_images(page)]:
+            key = obj.objgen
+            if key in done or key == (0, 0):
+                continue
+            done.add(key)
+            try:
+                if _shrink_one(pdf, obj, placed.get(key), dpi, quality, Image):
+                    changed += 1
+            except Exception:
+                continue  # one odd picture never fails the whole file
+    return changed
+
+
+def _form_images(page):
+    out = []
+    try:
+        xobjs = page.obj.get("/Resources", {}).get("/XObject", {})
+    except Exception:
+        return out
+    stack = [(x, 0) for x in xobjs.values()] if xobjs else []
+    seen = set()
+    while stack:
+        xo, depth = stack.pop()
+        if depth > 8 or xo.objgen in seen:
+            continue
+        seen.add(xo.objgen)
+        if xo.get("/Subtype") == "/Form":
+            sub = xo.get("/Resources", {}).get("/XObject", {})
+            for v in (sub.values() if sub else []):
+                if v.get("/Subtype") == "/Image":
+                    out.append(v)
+                else:
+                    stack.append((v, depth + 1))
+    return out
+
+
+def _shrink_one(pdf, obj, placed, dpi, quality, Image) -> bool:
+    if placed is None or obj.get("/ImageMask", False) or "/Mask" in obj or "/Decode" in obj:
+        return False
+    if int(obj.get("/BitsPerComponent", 8)) != 8:
+        return False  # 1 bit scans (CCITT, JBIG2) are already tiny
+    fl = _filters(obj)
+    if any(f in ("/JBIG2Decode", "/CCITTFaxDecode", "/JPXDecode") for f in fl):
+        return False
+    cs = obj.get("/ColorSpace")
+    if isinstance(cs, pikepdf.Array) and len(cs) and str(cs[0]) == "/Indexed":
+        return False
+    w, h = int(obj.get("/Width", 0)), int(obj.get("/Height", 0))
+    if w * h < _MIN_IMAGE_PIXELS:
+        return False
+    pw, ph = placed
+    if pw <= 0 or ph <= 0:
+        return False
+    eff = max(w / (pw / 72.0), h / (ph / 72.0))
+    scale = dpi / eff if eff > dpi * _DOWNSAMPLE_SLACK else 1.0
+    tw, th = max(1, round(w * scale)), max(1, round(h * scale))
+    im = _open_picture(obj, tw, th)
+    if im is None:
+        return False
+    if (im.width, im.height) != (tw, th):
+        im = im.resize((tw, th), Image.LANCZOS)
+    smask = obj.get("/SMask")
+    new_smask = None
+    if smask is not None:
+        if (tw, th) == (w, h):
+            new_smask = None  # mask stays as it is
+        else:
+            try:
+                m = pikepdf.PdfImage(smask).as_pil_image().convert("L").resize((tw, th), Image.LANCZOS)
+            except Exception:
+                return False
+            new_smask = m
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality, optimize=True, progressive=False,
+            subsampling=2 if quality < 80 else 0)
+    data = buf.getvalue()
+    old = len(obj.read_raw_bytes())
+    if new_smask is None and len(data) >= old * 0.92:
+        return False  # not worth it: keep the original bytes
+    keep_smask = smask if smask is not None and new_smask is None else None
+    obj.write(data, filter=pikepdf.Name.DCTDecode)
+    for k in ("/DecodeParms", "/Decode", "/Intent", "/Interpolate"):
+        if k in obj:
+            del obj[k]
+    obj.Width, obj.Height = tw, th
+    obj.BitsPerComponent = 8
+    obj.ColorSpace = pikepdf.Name.DeviceGray if im.mode == "L" else pikepdf.Name.DeviceRGB
+    if new_smask is not None:
+        sm = pikepdf.Stream(pdf, zlib.compress(new_smask.tobytes(), 9))
+        sm.Type, sm.Subtype = pikepdf.Name.XObject, pikepdf.Name.Image
+        sm.Width, sm.Height, sm.BitsPerComponent = tw, th, 8
+        sm.ColorSpace, sm.Filter = pikepdf.Name.DeviceGray, pikepdf.Name.FlateDecode
+        obj.SMask = sm
+    elif keep_smask is not None:
+        obj.SMask = keep_smask
+    return True
+
+
+def compress_pdf(src: str, out: str, level: str = "light") -> CompressResult:
+    return compress_pdf_detail(src, out, level)
+
+
+def compress_pdf_detail(src: str, out: str, level: str = "light"):
+    """Compresses src into out. out is never bigger than src: when nothing is
+    gained the original bytes are written and already_optimised is True."""
+    if level not in COMPRESS_LEVELS:
+        raise ToolkitError("Level must be light, medium or strong.")
+    spec = COMPRESS_LEVELS[level]
+    changed = 0
+    tmp = out + ".tmp"
     with pikepdf.open(src) as pdf:
-        pdf.save(out, recompress_flate=True, object_stream_mode=pikepdf.ObjectStreamMode.generate)
-    return CompressResult(os.path.getsize(src), os.path.getsize(out))
+        if spec is not None:
+            changed = _shrink_images(pdf, spec["dpi"], spec["quality"])
+            try:
+                pdf.remove_unreferenced_resources()
+            except Exception:
+                pass
+        pdf.save(tmp, recompress_flate=True, compress_streams=True,
+                 object_stream_mode=pikepdf.ObjectStreamMode.generate)
+    in_b, new_b = os.path.getsize(src), os.path.getsize(tmp)
+    if new_b >= in_b:
+        os.remove(tmp)
+        shutil.copyfile(src, out)
+        already = True
+    else:
+        os.replace(tmp, out)
+        already = False
+    return CompressResult(in_b, os.path.getsize(out), level, 0 if already else changed, already)
 
 
 def scrub_metadata(src: str, out: str) -> None:
