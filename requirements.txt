@@ -11,3 +11,9 @@ cryptography>=41
 authlib>=1.3
 requests>=2.31
 gunicorn>=22
+tzdata  # Apache-2.0; Sydney times on the signing record when the OS has no zoneinfo (P2 sign)
+# engine P2 helper B (ops_p2b): all permissive licences
+pdfplumber>=0.11      # MIT: table finding (pdf-tables, pdf-to csv/xlsx); pulls pdfminer.six (MIT)
+markdown>=3.5         # BSD 3 clause: Markdown to HTML for to-pdf
+xlrd>=2.0             # BSD: old .xls reading for excel-merge/excel-clean
+uharfbuzz>=0.40       # Apache 2.0: text shaping (Devanagari, Arabic) for translate-apply

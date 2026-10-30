@@ -4,6 +4,10 @@ FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-writer libreoffice-calc tesseract-ocr \
+      tesseract-ocr-nep tesseract-ocr-hin tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
+      tesseract-ocr-ara tesseract-ocr-vie tesseract-ocr-ind tesseract-ocr-spa \
+      tesseract-ocr-fra tesseract-ocr-deu tesseract-ocr-jpn tesseract-ocr-kor \
+      tesseract-ocr-tha tesseract-ocr-fil fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

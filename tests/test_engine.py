@@ -80,7 +80,8 @@ def test_good_signature_lists_operations(eng):
     rv = get(eng, "/internal/v1/operations")
     assert rv.status_code == 200
     slugs = [o["slug"] for o in rv.get_json()["operations"]]
-    assert slugs == ["compress", "merge", "convert", "to-jpeg", "images-to-pdf", "split",
+    # P1 ops first and in order; P2 ops (ops_p2a, ops_p2b) follow them.
+    assert slugs[:13] == ["compress", "merge", "convert", "to-jpeg", "images-to-pdf", "split",
                      "rotate", "scrub", "ocr", "redact", "watermark", "unlock", "pdf-to-docx"]
     ops = {o["slug"]: o for o in rv.get_json()["operations"]}
     assert ops["ocr"]["max_pages"] == 30 and ops["ocr"]["slow"] is True

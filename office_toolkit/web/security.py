@@ -23,6 +23,55 @@ def sniff(path: str, kind: str) -> None:
         raise ToolkitError("That file is not a supported Office document.")
 
 
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"  # legacy .xls and .doc
+_EXT_KIND = {".pdf": "pdf", ".jpg": "image", ".jpeg": "image", ".png": "image",
+             ".webp": "image", ".gif": "image", ".bmp": "image",
+             ".docx": "office", ".xlsx": "office", ".pptx": "office",
+             ".odt": "office", ".ods": "office", ".odp": "office"}
+TEXT_EXTS = (".txt", ".csv", ".md", ".markdown", ".html", ".htm", ".svg", ".json")
+
+
+def sniff_ext(path: str, ext: str) -> None:
+    """Same check as sniff, chosen by the file's extension (P2 ops that take
+    several types). Text types must be text: no NUL bytes, valid UTF-8 (a
+    UTF-8 or UTF-16 byte order mark is fine)."""
+    ext = ext.lower()
+    strict = {".png": (b"\x89PNG\r\n\x1a\n",), ".jpg": (b"\xff\xd8\xff",), ".jpeg": (b"\xff\xd8\xff",)}
+    if ext in strict:
+        with open(path, "rb") as fh:
+            if not fh.read(8).startswith(strict[ext]):
+                raise ToolkitError(f"That file is not a {'PNG' if ext == '.png' else 'JPEG'} image.")
+        return
+    if ext == ".webp":
+        with open(path, "rb") as fh:
+            head = fh.read(12)
+        if not (head.startswith(b"RIFF") and head[8:12] == b"WEBP"):
+            raise ToolkitError("That file is not a supported image.")
+        return
+    if ext in _EXT_KIND:
+        return sniff(path, _EXT_KIND[ext])
+    if ext in (".xls", ".doc"):
+        with open(path, "rb") as fh:
+            if fh.read(8) != OLE_MAGIC:
+                raise ToolkitError("That file is not a supported Office document.")
+        return
+    if ext in TEXT_EXTS:
+        with open(path, "rb") as fh:
+            head = fh.read(64 * 1024)
+        if head.startswith((b"\xff\xfe", b"\xfe\xff")):
+            return
+        if b"\x00" in head:
+            raise ToolkitError("That file is not a text file.")
+        try:
+            head.decode("utf-8")
+        except UnicodeDecodeError as e:
+            # the 64 KB read may cut the last character in half; that is fine
+            if not (e.reason == "unexpected end of data" and len(head) == 64 * 1024):
+                raise ToolkitError("That file is not UTF-8 text.")
+        return
+    raise ToolkitError("That file type is not supported.")
+
+
 def page_count_guard(path: str) -> None:
     from pypdf import PdfReader
     try:

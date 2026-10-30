@@ -504,9 +504,10 @@ def ocr_pdf(src: str, out: str, language: str = "eng", dpi: int = 200,
     """
     if not shutil.which("tesseract"):
         raise ToolkitError("Tesseract is not available on this machine.")
-    if language not in list_ocr_languages():
+    installed = list_ocr_languages()
+    if not language or any(part not in installed for part in language.split("+")):
         raise ToolkitError(f"OCR language '{language}' is not installed. "
-                           f"Available: {', '.join(list_ocr_languages())}")
+                           f"Available: {', '.join(installed)}")
     pdf = pdfium.PdfDocument(src)
     writer = PdfWriter()
     workdir = tempfile.mkdtemp(prefix="ocr-")

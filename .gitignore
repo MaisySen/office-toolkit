@@ -5,3 +5,4 @@ __pycache__/
 *.egg-info/
 .deploy/
 mobile/node_modules/
+office_toolkit/fonts/DroidSansFallback.ttf

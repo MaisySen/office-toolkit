@@ -17,6 +17,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+import importlib
 from dataclasses import dataclass, field
 
 from flask import Blueprint, abort, jsonify, request, send_file
@@ -24,7 +25,7 @@ from flask import Blueprint, abort, jsonify, request, send_file
 from office_toolkit import pdfops
 from office_toolkit.pdfops import ToolkitError
 from office_toolkit.web import service_auth
-from office_toolkit.web.security import page_count_guard, sniff
+from office_toolkit.web.security import page_count_guard, sniff, sniff_ext
 
 OUTPUT_TTL_SECONDS = 60 * 60
 POOL_SIZE = 2
@@ -36,60 +37,16 @@ MAX_FILES = 20
 now = time.time
 
 
-@dataclass(frozen=True)
-class Option:
-    """One setting a tool takes, sent as a multipart field beside the files.
+from office_toolkit.opspec import (DOCX, PDF, ZIP, Ctx, Operation, Option,  # noqa: F401
+                                    content_type_for)
 
-    kind: text, password, choice, int, ranges (1-3,5) or phrases (one per
-    line). The caller builds its options sheet from these."""
-    name: str
-    kind: str
-    label: str
-    required: bool = False
-    default: str | int | None = None
-    choices: tuple[str, ...] = ()
-    min: int | None = None
-    max: int | None = None
-    max_len: int = 200
-
-    def public(self) -> dict:
-        out = {"name": self.name, "kind": self.kind, "label": self.label,
-               "required": self.required}
-        if self.default is not None:
-            out["default"] = self.default
-        if self.choices:
-            out["choices"] = list(self.choices)
-        if self.min is not None:
-            out["min"] = self.min
-        if self.max is not None:
-            out["max"] = self.max
-        if self.kind in ("text", "password", "ranges", "phrases"):
-            out["max_len"] = self.max_len
-        return out
-
-
-PDF = "application/pdf"
-ZIP = "application/zip"
-DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 OCR_MAX_PAGES = 30
 OCR_MAX_BYTES = 20 * 1024 * 1024
 JPEG_MAX_PAGES = 100
 MAX_IMAGES = 50
-
-
-@dataclass(frozen=True)
-class Operation:
-    slug: str
-    label: str
-    kind: str          # pdf, office or image
-    min_files: int
-    max_files: int
-    output_name: str
-    content_type: str = PDF
-    options: tuple[Option, ...] = ()
-    max_pages: int | None = None   # tighter than the engine wide page cap
-    max_bytes: int | None = None   # tighter than the caller's plan cap
-    slow: bool = False             # reports page by page progress
+# P2 widened the OCR languages; "eng" stays first and the default.
+OCR_LANGUAGES = ("eng", "nep", "hin", "chi_sim", "chi_tra", "ara", "vie", "ind", "spa", "fra",
+                 "deu", "jpn", "kor", "tha", "fil", "eng+nep", "eng+hin")
 
 
 _RANGES = Option("ranges", "ranges", "Pages", max_len=200)
@@ -111,7 +68,7 @@ OPERATIONS = {
     "scrub": Operation("scrub", "Remove metadata", "pdf", 1, 1, "cleaned.pdf"),
     "ocr": Operation("ocr", "Make searchable (OCR)", "pdf", 1, 1, "searchable.pdf", PDF,
                      (Option("language", "choice", "Language", default="eng",
-                             choices=("eng",)),),
+                             choices=OCR_LANGUAGES),),
                      max_pages=OCR_MAX_PAGES, max_bytes=OCR_MAX_BYTES, slow=True),
     "redact": Operation("redact", "Redact text", "pdf", 1, 1, "redacted.pdf", PDF,
                         (Option("phrases", "phrases", "Words or phrases to black out",
@@ -130,6 +87,30 @@ OPERATIONS = {
 _RANGES_RE = re.compile(r"^\s*\d{1,4}(\s*-\s*\d{1,4})?(\s*,\s*\d{1,4}(\s*-\s*\d{1,4})?){0,99}\s*$")
 _IMAGE_EXT = (".jpg", ".jpeg", ".png")
 
+# P2 op modules: each exposes OPERATIONS and HANDLERS (see opspec.py). A
+# module not in this checkout is skipped; a slug may never replace a P1 op.
+P2_MODULES = ("office_toolkit.ops_p2a", "office_toolkit.ops_p2b")
+P2_HANDLERS: dict = {}
+
+
+def _load_p2(modname: str) -> None:
+    try:
+        mod = importlib.import_module(modname)
+    except ModuleNotFoundError as e:
+        if e.name == modname:
+            return
+        raise
+    ops = getattr(mod, "OPERATIONS", {})
+    clash = set(ops) & set(OPERATIONS)
+    if clash:
+        raise RuntimeError(f"{modname} redefines {sorted(clash)}")
+    OPERATIONS.update(ops)
+    P2_HANDLERS.update(getattr(mod, "HANDLERS", {}))
+
+
+for _m in P2_MODULES:
+    _load_p2(_m)
+
 
 def parse_options(op: Operation, form) -> dict:
     """Checks the tool's settings; raises ToolkitError with a plain message."""
@@ -143,7 +124,7 @@ def parse_options(op: Operation, form) -> dict:
             out[o.name] = o.default
             continue
         raw = str(raw)
-        if o.kind in ("text", "password", "ranges", "phrases") and len(raw) > o.max_len:
+        if o.kind in ("text", "password", "ranges", "phrases", "json") and len(raw) > o.max_len:
             raise ToolkitError(f"{o.label} is too long.")
         if o.kind == "choice":
             if raw not in o.choices:
@@ -170,6 +151,11 @@ def parse_options(op: Operation, form) -> dict:
             out[o.name] = items
         elif o.kind == "password":
             out[o.name] = raw
+        elif o.kind == "json":
+            try:
+                out[o.name] = json.loads(raw)
+            except (ValueError, RecursionError):
+                raise ToolkitError(f"{o.label} is not valid.")
         else:
             out[o.name] = raw.strip()
     return out
@@ -214,7 +200,7 @@ class Job:
             out["result"] = self.result
         if self.status == "done":
             out["output"] = {"name": self.output_name, "bytes": self.output_bytes,
-                             "content_type": OPERATIONS[self.op].content_type}
+                             "content_type": _content_type(self)}
             out["expires_at"] = int(self.expires_at() or 0)
         return out
 
@@ -313,11 +299,20 @@ def _progress(job: Job, done: int, total: int) -> None:
     _save(job)
 
 
+def _content_type(job: Job) -> str:
+    op = OPERATIONS[job.op]
+    if job.output_name and job.output_name != op.output_name:
+        return content_type_for(job.output_name)
+    return op.content_type
+
+
 def _run_op(job: Job, inputs: list[str], opts: dict, out: str) -> dict:
     """Runs one tool. Returns small facts about the result (never file names)."""
     work = os.path.join(job.dir, "work")
     os.makedirs(work, exist_ok=True)
     op = job.op
+    if op in P2_HANDLERS:
+        return _run_p2(job, inputs, opts, out, work)
     if op == "compress":
         pdfops.compress_pdf(inputs[0], out)
         return {}
@@ -369,6 +364,17 @@ def _run_op(job: Job, inputs: list[str], opts: dict, out: str) -> dict:
     raise ToolkitError("That tool is not available.")
 
 
+def _run_p2(job: Job, inputs: list[str], opts: dict, out: str, work: str) -> dict:
+    ctx = Ctx(work=work, out_dir=os.path.dirname(out), extra=list(opts.pop("_extra", [])),
+              progress=lambda done, total: _progress(job, done, total))
+    facts = P2_HANDLERS[job.op](ctx, inputs, opts, out)
+    if ctx.output_name and ctx.output_name != OPERATIONS[job.op].output_name:
+        if ctx.output_name not in OPERATIONS[job.op].outputs:
+            raise RuntimeError("output name not declared")
+        job.output_name = ctx.output_name
+    return facts
+
+
 def _process(job: Job, inputs: list[str], opts: dict | None = None) -> None:
     job.status = "running"
     _save(job)
@@ -377,9 +383,9 @@ def _process(job: Job, inputs: list[str], opts: dict | None = None) -> None:
     os.makedirs(os.path.dirname(out), exist_ok=True)
     try:
         job.result = _run_op(job, inputs, opts or {}, out)
-        job.output = out
-        job.output_bytes = os.path.getsize(out)
-        job.output_name = op.output_name
+        job.output_name = job.output_name or op.output_name
+        job.output = os.path.join(os.path.dirname(out), job.output_name)
+        job.output_bytes = os.path.getsize(job.output)
         job.status = "done"
     except ToolkitError as e:
         job.status, job.error = "failed", str(e)
@@ -390,6 +396,8 @@ def _process(job: Job, inputs: list[str], opts: dict | None = None) -> None:
         shutil.rmtree(os.path.join(job.dir, "in"), ignore_errors=True)
         shutil.rmtree(os.path.join(job.dir, "work"), ignore_errors=True)
         job.progress = None
+        if job.status == "failed":
+            job.output_name = None
         job.finished_at = now()
         if job.status == "failed":
             shutil.rmtree(os.path.join(job.dir, "out"), ignore_errors=True)
@@ -424,7 +432,8 @@ def operations():
          "min_files": o.min_files, "max_files": o.max_files,
          "output": {"name": o.output_name, "content_type": o.content_type},
          "options": [x.public() for x in o.options],
-         "max_pages": o.max_pages, "max_bytes": o.max_bytes, "slow": o.slow}
+         "max_pages": o.max_pages, "max_bytes": o.max_bytes, "slow": o.slow,
+         **o.extra_public()}
         for o in OPERATIONS.values()]})
 
 
@@ -462,15 +471,22 @@ def create_job():
                 raise ToolkitError("Word, Excel, PowerPoint or OpenDocument files only.")
             if op.kind == "image" and ext not in _IMAGE_EXT:
                 raise ToolkitError("JPEG or PNG images only.")
+            if op.kind == "file" and ext not in op.exts:
+                raise ToolkitError(f"{op.label} takes {_ext_words(op.exts)} files only.")
             p = os.path.join(d, "in", f"{i:02d}{ext}")
             f.save(p)
-            sniff(p, op.kind)
-            if op.kind == "pdf":
+            if op.kind == "file":
+                sniff_ext(p, ext)
+            else:
+                sniff(p, op.kind)
+            if op.kind == "pdf" or (op.kind == "file" and ext == ".pdf"):
                 page_count_guard(p)
                 if op.max_pages and _count_pages(p) > op.max_pages:
                     raise ToolkitError(f"{op.label} takes PDFs up to {op.max_pages} pages.")
             inputs.append(p)
         opts = parse_options(op, request.form)
+        if op.extra:
+            opts["_extra"] = _save_extra(op, d)
     except ToolkitError as e:
         shutil.rmtree(d, ignore_errors=True)
         return _err("bad_file", str(e), 400)
@@ -481,6 +497,32 @@ def create_job():
     else:
         _pool.submit(_process, job, inputs, opts)
     return jsonify(job.public()), 202
+
+
+def _ext_words(exts: tuple[str, ...]) -> str:
+    names = sorted({e.lstrip(".").upper() for e in exts})
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+
+
+def _save_extra(op: Operation, d: str) -> list[str]:
+    """Saves the op's second field of files (in order) beside the inputs."""
+    ex = op.extra
+    files = request.files.getlist(ex.field)
+    if not (ex.min <= len(files) <= ex.max):
+        raise ToolkitError(f"{ex.label}: send {ex.min} to {ex.max} files.")
+    paths = []
+    for i, f in enumerate(files):
+        ext = os.path.splitext(f.filename or "")[1].lower()
+        if ext not in ex.exts:
+            raise ToolkitError(f"{ex.label}: {_ext_words(ex.exts)} files only.")
+        p = os.path.join(d, "in", f"x{i:02d}{ext}")
+        f.save(p)
+        if ex.max_bytes_each and os.path.getsize(p) > ex.max_bytes_each:
+            raise ToolkitError(f"{ex.label}: each file must be under "
+                               f"{max(1, ex.max_bytes_each // 1024)} KB.")
+        sniff_ext(p, ext)
+        paths.append(p)
+    return paths
 
 
 def _owned(jid: str, c: service_auth.Caller) -> Job:
@@ -501,7 +543,7 @@ def job_output(jid):
     job = _owned(jid, caller())
     if job.status != "done" or not job.output or not os.path.exists(job.output):
         abort(404)
-    return send_file(job.output, mimetype=OPERATIONS[job.op].content_type,
+    return send_file(job.output, mimetype=_content_type(job),
                      as_attachment=True, download_name=job.output_name)
 
 
