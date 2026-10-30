@@ -162,7 +162,7 @@ def add_password(src: str, out: str, password: str) -> None:
 # ------------------------------------------------------------------ rendering
 
 def pdf_to_jpeg(src: str, out_dir: str, dpi: int = 150, quality: int = 90,
-                base: str | None = None) -> list[str]:
+                base: str | None = None, on_page=None) -> list[str]:
     if dpi < 50 or dpi > 600:
         raise ToolkitError("DPI must be between 50 and 600.")
     os.makedirs(out_dir, exist_ok=True)
@@ -174,6 +174,8 @@ def pdf_to_jpeg(src: str, out_dir: str, dpi: int = 150, quality: int = 90,
         out = os.path.join(out_dir, f"{stem}-p{i+1}.jpg")
         pil.save(out, "JPEG", quality=quality)
         outs.append(out)
+        if on_page:
+            on_page(i + 1)
     pdf.close()
     return outs
 
@@ -352,6 +354,41 @@ def redact_pdf(src: str, out: str, regions: list[RedactRegion], dpi: int = 200,
     return {"pages_rasterised": burned, "pages_total": n}
 
 
+def redact_phrases(src: str, out: str, phrases: list[str], dpi: int = 200) -> dict:
+    """Blacks out every match of each phrase and proves it.
+
+    Refuses scans with no text layer, phrases that also sit in annotations or
+    attachments, and any result where a phrase is still extractable. Returns
+    the number of matches covered and the pages rebuilt."""
+    reader = PdfReader(src)
+    if not any((p.extract_text() or "").strip() for p in reader.pages):
+        raise ToolkitError("This PDF has no text layer (it looks like a scan). "
+                           "Make it searchable with OCR first, then redact.")
+    for phrase in phrases:
+        hits = _needle_in_extras(src, phrase)
+        if hits:
+            raise ToolkitError(f"'{phrase}' also appears in " + " and ".join(hits) +
+                               ", which this tool cannot redact. Nothing was changed.")
+    regions: list[RedactRegion] = []
+    for phrase in phrases:
+        regions.extend(find_text_rects(src, phrase))
+    if not regions:
+        raise ToolkitError("None of those words or phrases were found in the text.")
+    matches = sum((p.extract_text() or "").count(ph) for p in reader.pages for ph in phrases)
+    res = redact_pdf(src, out, regions, dpi=dpi)
+
+    def _overlap(a, b):
+        return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+    remaining = "\n".join((p.extract_text() or "") for p in PdfReader(out).pages)
+    for phrase in phrases:
+        missed = [f for f in find_text_rects(src, phrase)
+                  if not any(f.page == r.page and _overlap(f.rect, r.rect) for r in regions)]
+        if missed or phrase in remaining:
+            os.unlink(out)
+            raise ToolkitError("Redaction could not be verified, so no file was kept.")
+    return {"matches": max(matches, len(regions)), "pages_rasterised": res["pages_rasterised"]}
+
+
 def _needle_in_extras(src: str, needle: str) -> list[str]:
     """Where else does the needle hide? Returns names of un-redactable carriers."""
     hits = []
@@ -455,7 +492,7 @@ def office_to_pdf(src: str, out_dir: str, timeout: int = 120) -> str:
 
 
 def ocr_pdf(src: str, out: str, language: str = "eng", dpi: int = 200,
-            timeout: int = 300) -> None:
+            timeout: int = 300, on_page=None) -> None:
     """Adds a searchable text layer to scanned pages using Tesseract directly.
 
     Pages are rendered to images, each is OCRed, and the results are combined
@@ -487,6 +524,8 @@ def ocr_pdf(src: str, out: str, language: str = "eng", dpi: int = 200,
                 raise ToolkitError(f"OCR failed on page {i + 1}: "
                                    f"{proc.stderr.strip()[-200:]}")
             writer.add_page(PdfReader(page_pdf).pages[0])
+            if on_page:
+                on_page(i + 1)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     pdf.close()
