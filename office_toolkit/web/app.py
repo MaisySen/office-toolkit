@@ -833,3 +833,9 @@ for slug, _label, fn in OPS:
                      view_func=(lambda f: (lambda: run(f)))(fn), methods=["POST"])
     app.add_url_rule(f"/api/run/{slug}", endpoint=f"api_run_{slug}",
                      view_func=(lambda f: (lambda: api_run(f)))(fn), methods=["POST"])
+
+
+# Engine only mode and the signed internal job API (used by Multies).
+from office_toolkit.web import engine as _engine  # noqa: E402
+
+_engine.install(app)
