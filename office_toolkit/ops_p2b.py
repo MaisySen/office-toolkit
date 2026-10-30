@@ -617,10 +617,23 @@ def find_tables(src: str, max_pages: int = TABLES_MAX_PAGES, on_page=None) -> li
         if n > max_pages:
             raise ToolkitError(f"Table finding takes PDFs up to {max_pages} pages; this has {n}.")
         for i, page in enumerate(pdf.pages, 1):
+            found = 0
             for t in page.extract_tables():
                 rows = [[("" if c is None else str(c)) for c in row] for row in t]
                 rows = [r for r in rows if any(c.strip() for c in r)]
                 if len(rows) >= 2 or (rows and len(rows[0]) >= 2):
+                    tables.append({"page": i, "rows": rows})
+                    found += 1
+                    if len(tables) > TABLES_MAX:
+                        raise ToolkitError(f"More than {TABLES_MAX} tables found; split the PDF first.")
+            if not found:
+                # R68: tables without ruling lines (invoices, statements,
+                # printed spreadsheets) found from how the words line up
+                try:
+                    loose = borderless_tables(page)
+                except Exception:
+                    loose = []
+                for rows in loose:
                     tables.append({"page": i, "rows": rows})
                     if len(tables) > TABLES_MAX:
                         raise ToolkitError(f"More than {TABLES_MAX} tables found; split the PDF first.")
@@ -631,13 +644,133 @@ def find_tables(src: str, max_pages: int = TABLES_MAX_PAGES, on_page=None) -> li
     return tables
 
 
+_NUMISH = re.compile(r"^[\(\-+]?[$€£¥₹रू]*\s*[\d०-९][\d०-९,.\s/:%-]*\)?$")
+
+
+def borderless_tables(page) -> list[list[list[str]]]:
+    """Tables with no ruling lines, read from word positions: lines of words
+    are split into cells at wide gaps; runs of at least three lines with two
+    or more cells whose cells stack into shared columns become a table.
+    Prose (one cell per line) never qualifies."""
+    words = page.extract_words(x_tolerance=1.5, y_tolerance=2, keep_blank_chars=False)
+    if not words:
+        return []
+    words.sort(key=lambda w: (round(w["top"]), w["x0"]))
+    lines: list[list[dict]] = []
+    for w in words:
+        if lines and abs(w["top"] - lines[-1][0]["top"]) <= 2.5:
+            lines[-1].append(w)
+        else:
+            lines.append([w])
+    rows = []
+    for ln in lines:
+        ln.sort(key=lambda w: w["x0"])
+        size = max(4.0, sum(w["bottom"] - w["top"] for w in ln) / len(ln))
+        gap = max(7.0, size * 0.9)
+        cells = [[ln[0]["x0"], ln[0]["x1"], ln[0]["text"]]]
+        for w in ln[1:]:
+            if w["x0"] - cells[-1][1] > gap:
+                cells.append([w["x0"], w["x1"], w["text"]])
+            else:
+                cells[-1][1] = w["x1"]
+                cells[-1][2] += " " + w["text"]
+        rows.append({"top": ln[0]["top"], "h": size, "cells": cells})
+    # blocks of neighbouring lines with two or more cells
+    blocks: list[list[dict]] = []
+    cur: list[dict] = []
+    for r in rows:
+        near = cur and r["top"] - cur[-1]["top"] <= max(cur[-1]["h"], r["h"]) * 2.6
+        if len(r["cells"]) >= 2 and (not cur or near):
+            cur.append(r)
+            continue
+        if len(cur) >= 3:
+            blocks.append(cur)
+        cur = [r] if len(r["cells"]) >= 2 else []
+    if len(cur) >= 3:
+        blocks.append(cur)
+    out = []
+    for b in blocks:
+        # columns: x ranges of cells that overlap merge into one column
+        spans = sorted([c[0], c[1]] for r in b for c in r["cells"])
+        cols: list[list[float]] = []
+        for x0, x1 in spans:
+            if cols and x0 <= cols[-1][1] + 1:
+                cols[-1][1] = max(cols[-1][1], x1)
+            else:
+                cols.append([x0, x1])
+        if len(cols) < 2 or len(cols) > 30:
+            continue
+        table = []
+        for r in b:
+            row = [""] * len(cols)
+            for x0, x1, t in r["cells"]:
+                k = next(i for i, c in enumerate(cols) if c[0] <= x0 + 1 and x1 <= c[1] + 1)
+                row[k] = (row[k] + " " + t).strip()
+            table.append(row)
+        filled = [sum(1 for c in row if c) for row in table]
+        if sum(1 for f in filled if f >= 2) < max(3, 0.6 * len(table)):
+            continue
+        numeric_cols = sum(1 for k in range(len(cols))
+                           if sum(1 for row in table if row[k] and _NUMISH.match(row[k]))
+                           >= max(2, 0.5 * sum(1 for row in table if row[k])))
+        if len(cols) < 3 and not numeric_cols:
+            continue
+        out.append(table)
+    return out
+
+
+def _no_tables_message(src: str) -> str:
+    """Why nothing came out, in words that say what to do next."""
+    try:
+        import pypdfium2 as pdfium
+        doc = pdfium.PdfDocument(src)
+        try:
+            chars = 0
+            for i in range(min(len(doc), 20)):
+                tp = doc[i].get_textpage()
+                chars += len(tp.get_text_range().strip())
+                tp.close()
+                if chars > 20:
+                    break
+        finally:
+            doc.close()
+    except Exception:
+        chars = 1
+    if chars <= 20:
+        return ("No tables were found because this PDF has no text in it (it looks like a scan). "
+                "Run Make searchable (OCR) first, then try again.")
+    return ("No tables were found in this PDF. Tables need rows and columns of text; "
+            "to get all the text instead, use PDF to Word or PDF to text.")
+
+
 def pdf_tables(src: str, out: str, on_page=None) -> dict:
     """PDF -> xlsx, one sheet per table. Facts: tables."""
     tables = find_tables(src, on_page=on_page)
     if not tables:
-        raise ToolkitError("No tables were found in this PDF. Scanned pages need OCR first.")
+        raise ToolkitError(_no_tables_message(src))
     _tables_to_xlsx(tables, out)
     return {"tables": len(tables)}
+
+
+_PLAIN_NUM = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+
+
+def _as_number(v):
+    """A table cell that is plainly a number becomes a number in Excel
+    (1,800.00 -> 1800.0); codes with leading zeros and long ids stay text."""
+    if not isinstance(v, str):
+        return v
+    t = v.strip()
+    if not _PLAIN_NUM.match(t) or len(t) > 15:
+        return v
+    digits = t.lstrip("-")
+    if len(digits) > 1 and digits[0] == "0" and not digits.startswith("0."):
+        return v
+    try:
+        f = float(t.replace(",", ""))
+    except ValueError:
+        return v
+    return int(f) if "." not in t and abs(f) < 1e15 else f
 
 
 def _tables_to_xlsx(tables, out):
@@ -646,7 +779,7 @@ def _tables_to_xlsx(tables, out):
     used: set[str] = set()
     for n, t in enumerate(tables, 1):
         ws = wb.create_sheet(_sheet_title(f"Table {n} (page {t['page']})", used))
-        _write_sheet_rows(ws, t["rows"])
+        _write_sheet_rows(ws, [[_as_number(c) for c in r] for r in t["rows"]])
     wb.save(out)
 
 
@@ -657,7 +790,7 @@ def pdf_to(src: str, target: str, work: str, on_page=None) -> dict:
     if target in ("csv", "xlsx"):
         tables = find_tables(src, on_page=on_page)
         if not tables:
-            raise ToolkitError("No tables were found in this PDF. Scanned pages need OCR first.")
+            raise ToolkitError(_no_tables_message(src))
         if target == "xlsx":
             out = os.path.join(work, "tables.xlsx")
             _tables_to_xlsx(tables, out)

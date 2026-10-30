@@ -42,6 +42,13 @@ from office_toolkit.opspec import (DOCX, PDF, ZIP, Ctx, Operation, Option,  # no
 
 OCR_MAX_PAGES = 30
 OCR_MAX_BYTES = 20 * 1024 * 1024
+# R68: OCR in the non Latin scripts reads fewer pages per run (each page is
+# about 25 s on the free host, so 10 pages stay near four minutes). The P1
+# listing is unchanged; the cap is checked when the job is created.
+HEAVY_OCR_MAX_PAGES = 10
+HEAVY_OCR_LANGUAGES = {"nep": "Nepali", "hin": "Hindi", "eng+nep": "Nepali", "eng+hin": "Hindi",
+                       "chi_sim": "Chinese", "chi_tra": "Chinese", "jpn": "Japanese",
+                       "kor": "Korean", "ara": "Arabic", "tha": "Thai"}
 JPEG_MAX_PAGES = 100
 MAX_IMAGES = 50
 # P2 widened the OCR languages; "eng" stays first and the default.
@@ -485,6 +492,7 @@ def create_job():
                     raise ToolkitError(f"{op.label} takes PDFs up to {op.max_pages} pages.")
             inputs.append(p)
         opts = parse_options(op, request.form)
+        _check_heavy_ocr(op.slug, opts, inputs)
         if op.extra:
             opts["_extra"] = _save_extra(op, d)
     except ToolkitError as e:
@@ -497,6 +505,26 @@ def create_job():
     else:
         _pool.submit(_process, job, inputs, opts)
     return jsonify(job.public()), 202
+
+
+def _check_heavy_ocr(slug: str, opts: dict, inputs: list[str]) -> None:
+    """Refuses, with a plain way forward, OCR runs in a heavy language that
+    are longer than HEAVY_OCR_MAX_PAGES (PDF pages or scan photos)."""
+    lang = opts.get("language")
+    name = HEAVY_OCR_LANGUAGES.get(lang or "")
+    if not name:
+        return
+    cap = HEAVY_OCR_MAX_PAGES
+    if slug == "ocr" and inputs:
+        n = _count_pages(inputs[0])
+        if n > cap:
+            raise ToolkitError(
+                f"OCR in {name} reads up to {cap} pages at a time and this PDF has {n} pages. "
+                f"Split it into parts of {cap} pages with Split PDF, then run OCR on each part.")
+    elif slug == "scan-clean" and opts.get("ocr") == "yes" and len(inputs) > cap:
+        raise ToolkitError(
+            f"Searchable text in {name} works on up to {cap} photos at a time and you added "
+            f"{len(inputs)}. Run it in smaller batches, or turn off searchable text.")
 
 
 def _ext_words(exts: tuple[str, ...]) -> str:

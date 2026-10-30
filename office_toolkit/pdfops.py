@@ -192,7 +192,15 @@ def _text_overlay(page_w: float, page_h: float, text: str, opacity: float,
     c.saveState()
     c.translate(page_w / 2, page_h / 2)
     c.rotate(45)
-    c.drawCentredString(0, 0, text)
+    try:   # R68: any script (Nepali, Hindi, Arabic, CJK) with the bundled fonts
+        from office_toolkit import textdraw
+        use = textdraw.available() and textdraw.needs_unicode(text)
+    except Exception:
+        use = False
+    if use:
+        textdraw.draw(c, 0, 0, text, font_size, bold=True, align="center")
+    else:
+        c.drawCentredString(0, 0, text)
     c.restoreState()
     c.save()
     buf.seek(0)
@@ -517,9 +525,12 @@ def ocr_pdf(src: str, out: str, language: str = "eng", dpi: int = 200,
             png = os.path.join(workdir, f"p{i}.png")
             img.save(png)
             base = os.path.join(workdir, f"p{i}")
+            # one OpenMP thread: on a small shared host several threads fight
+            # over a fraction of a CPU and each page takes far longer (R68)
             proc = subprocess.run(
                 ["tesseract", png, base, "-l", language, "pdf"],
-                capture_output=True, text=True, timeout=timeout)
+                capture_output=True, text=True, timeout=timeout,
+                env=dict(os.environ, OMP_THREAD_LIMIT="1"))
             page_pdf = base + ".pdf"
             if proc.returncode != 0 or not os.path.exists(page_pdf):
                 raise ToolkitError(f"OCR failed on page {i + 1}: "

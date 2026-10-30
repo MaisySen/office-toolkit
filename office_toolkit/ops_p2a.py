@@ -125,6 +125,47 @@ def _safe_text(s: str, font: str) -> str:
     return s
 
 
+
+def _tw(text: str, size: float, font: str, bold: bool = False) -> float:
+    """Width of text as drawn by _td (shaped, per script font) when the
+    bundled fonts are present, else reportlab's width in font."""
+    from office_toolkit import textdraw
+    if textdraw.needs_unicode(text) and textdraw.available():
+        return textdraw.width(text, size, bold=bold)
+    from reportlab.pdfbase import pdfmetrics
+    return pdfmetrics.stringWidth(_safe_text(text, font), font, size)
+
+
+def _td(c, x: float, y: float, text: str, size: float, font: str, bold: bool = False,
+        align: str = "left") -> None:
+    """Draws one line in any script (R68: Nepali, Hindi, Arabic, CJK get
+    their own bundled font and HarfBuzz shaping). Falls back to font."""
+    from office_toolkit import textdraw
+    if textdraw.needs_unicode(text) and textdraw.available():
+        textdraw.draw(c, x, y, text, size, bold=bold, align=align)
+        return
+    c.setFont(font, size)
+    t = _safe_text(text, font)
+    if align == "center":
+        c.drawCentredString(x, y, t)
+    elif align == "right":
+        c.drawRightString(x, y, t)
+    else:
+        c.drawString(x, y, t)
+
+
+def _markup(text: str, font: str, escape) -> str:
+    """Paragraph markup for text in any script: runs the base font cannot
+    draw go in the bundled font for their script (shaped by reportlab)."""
+    from office_toolkit import textdraw
+    if not textdraw.available() or not textdraw.needs_unicode(text):
+        return escape(_safe_text(text, font))
+    out = []
+    for face, t in textdraw.runs(text):
+        out.append(escape(t) if face == "MTSans" else f'<font face="{face}">{escape(t)}</font>')
+    return "".join(out)
+
+
 def _display(page) -> tuple[float, float, float, float, int]:
     """(x0, y0, width, height, rotate) of a page as shown."""
     mb = page.mediabox
@@ -404,10 +445,24 @@ def form_fill(src: str, out: str, values, flatten: bool) -> int:
         s = name.rsplit(".", 1)[-1]
         if s != name and shorts.get(s) == 1:
             by_short[s] = v
+    from office_toolkit import textdraw
+    # R68: values in Nepali, Hindi and other non Latin scripts get an
+    # appearance drawn with the bundled fonts (pypdf would draw them in the
+    # form's Helvetica, which shows question marks or nothing).
+    uni = {k for k, v in {**by_short, **fill}.items()
+           if not v.startswith("/") and textdraw.needs_unicode(v) and textdraw.available()}
+    plain = {k: v for k, v in {**by_short, **fill}.items() if k not in uni}
+    drawn = {k: v for k, v in {**by_short, **fill}.items() if k in uni}
     for page in w.pages:
         if page.get("/Annots"):
-            w.update_page_form_field_values(page, {**by_short, **fill}, auto_regenerate=False,
-                                            flatten=flatten)
+            if plain:
+                w.update_page_form_field_values(page, plain, auto_regenerate=False,
+                                                flatten=flatten)
+            if drawn:
+                w.update_page_form_field_values(page, drawn, auto_regenerate=False,
+                                                flatten=False)
+    if drawn:
+        _unicode_appearances(w, drawn, flatten)
     if flatten:
         for page in w.pages:
             annots = page.get("/Annots")
@@ -422,9 +477,186 @@ def form_fill(src: str, out: str, values, flatten: bool) -> int:
         if "/AcroForm" in w._root_object:
             del w._root_object["/AcroForm"]
     else:
-        w.set_need_appearances_writer(True)
+        # every filled field carries its own appearance; a viewer told to
+        # redraw them would use the form's font and lose non Latin letters
+        w.set_need_appearances_writer(not drawn)
     _write(w, out)
     return len(fill)
+
+
+def _qualified(annot) -> str:
+    parts = []
+    node = annot
+    for _ in range(50):
+        t = node.get("/T")
+        if t is not None:
+            parts.append(str(t))
+        parent = node.get("/Parent")
+        if parent is None:
+            break
+        node = parent.get_object()
+    return ".".join(reversed(parts))
+
+
+def _field_flags(annot) -> int:
+    node = annot
+    for _ in range(50):
+        if "/Ff" in node:
+            return int(node["/Ff"])
+        parent = node.get("/Parent")
+        if parent is None:
+            return 0
+        node = parent.get_object()
+    return 0
+
+
+def _da_size(annot) -> float:
+    node = annot
+    for _ in range(50):
+        da = node.get("/DA")
+        if da is not None:
+            m = re.search(r"([\d.]+)\s+Tf", str(da))
+            return float(m.group(1)) if m else 0.0
+        parent = node.get("/Parent")
+        if parent is None:
+            return 0.0
+        node = parent.get_object()
+    return 0.0
+
+
+def _wrap_lines(text: str, size: float, width: float) -> list[str]:
+    from office_toolkit import textdraw
+    lines: list[str] = []
+    for para in text.splitlines() or [""]:
+        cur = ""
+        for word in re.findall(r"\S+\s*", para) or [""]:
+            cand = cur + word
+            if cur and textdraw.width(cand.rstrip(), size) > width:
+                lines.append(cur.rstrip())
+                cur = word
+            else:
+                cur = cand
+        lines.append(cur.rstrip())
+    return lines
+
+
+def _mk_color(arr):
+    try:
+        v = [float(t) for t in arr]
+    except Exception:
+        return None
+    if len(v) == 1:
+        return Color(v[0], v[0], v[0])
+    if len(v) == 3:
+        return Color(*v)
+    if len(v) == 4:
+        c, m, y, k = v
+        return Color((1 - c) * (1 - k), (1 - m) * (1 - k), (1 - y) * (1 - k))
+    return None
+
+
+def _draw_box(c, x0, y0, w, h, look) -> None:
+    """The field's own background and border (its /MK), as viewers draw it."""
+    bg, bc, bw = look
+    if bg is None and bc is None:
+        return
+    c.saveState()
+    if bg is not None:
+        c.setFillColor(bg)
+    if bc is not None and bw > 0:
+        c.setStrokeColor(bc); c.setLineWidth(bw)
+    c.rect(x0 + bw / 2, y0 + bw / 2, w - bw, h - bw, stroke=int(bc is not None and bw > 0),
+           fill=int(bg is not None))
+    c.restoreState()
+
+
+def _look(a):
+    mk = a.get("/MK")
+    mk = mk.get_object() if mk is not None else {}
+    bg = _mk_color(mk.get("/BG")) if mk.get("/BG") is not None else None
+    bc = _mk_color(mk.get("/BC")) if mk.get("/BC") is not None else None
+    bs = a.get("/BS")
+    try:
+        bw = float(bs.get_object().get("/W", 1)) if bs is not None else 1.0
+    except Exception:
+        bw = 1.0
+    return bg, bc, bw
+
+
+def _draw_field(c, x0: float, y0: float, w: float, h: float, value: str, size: float,
+                multiline: bool, look=(None, None, 0.0)) -> None:
+    from office_toolkit import textdraw
+    _draw_box(c, x0, y0, w, h, look)
+    c.setFillColor(Color(0, 0, 0))
+    pad = 2
+    if multiline:
+        size = size or 10
+        lines = _wrap_lines(value, size, w - 2 * pad)
+        y = y0 + h - pad - size
+        for ln in lines:
+            if y < y0 - size * 0.3:
+                break
+            textdraw.draw(c, x0 + pad, y, ln, size)
+            y -= size * 1.2
+        return
+    if not size:   # auto size: fit the height, then the width
+        size = max(4.0, min(12.0, h * 0.62))
+        while size > 4 and textdraw.width(value, size) > w - 2 * pad:
+            size -= 0.5
+    # Devanagari sits higher above the baseline than Latin; centre the line
+    textdraw.draw(c, x0 + pad, y0 + (h - size) / 2 + size * 0.22, value, size)
+
+
+def _unicode_appearances(w, values: dict, flatten: bool) -> None:
+    """Draws each listed text field's value with the bundled fonts: as its
+    appearance stream, or (flatten) straight onto the page."""
+    from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject,
+                               StreamObject)
+    for page in w.pages:
+        annots = page.get("/Annots")
+        if not annots:
+            continue
+        overlay = []
+        for ref in annots.get_object():
+            a = ref.get_object()
+            if a.get("/Subtype") != "/Widget":
+                continue
+            q = _qualified(a)
+            v = values.get(q)
+            if v is None:
+                v = values.get(q.rsplit(".", 1)[-1])
+            if v is None:
+                continue
+            x1, y1, x2, y2 = [float(t) for t in a["/Rect"]]
+            rx, ry, rw, rh = min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1)
+            if rw < 1 or rh < 1:
+                continue
+            multiline = bool(_field_flags(a) & 4096)
+            size = _da_size(a)
+            if flatten:
+                overlay.append((rx, ry, rw, rh, v, size, multiline))
+                continue
+            buf = io.BytesIO()
+            c = rl_canvas.Canvas(buf, pagesize=(rw, rh))
+            _draw_field(c, 0, 0, rw, rh, v, size, multiline, _look(a))
+            c.showPage(); c.save(); buf.seek(0)
+            src = PdfReader(buf).pages[0]
+            xo = StreamObject()
+            xo.set_data(src.get_contents().get_data())
+            xo.update({NameObject("/Type"): NameObject("/XObject"),
+                       NameObject("/Subtype"): NameObject("/Form"),
+                       NameObject("/BBox"): ArrayObject([FloatObject(0), FloatObject(0),
+                                                         FloatObject(rw), FloatObject(rh)]),
+                       NameObject("/Resources"): src["/Resources"].clone(w)})
+            a[NameObject("/AP")] = DictionaryObject({NameObject("/N"): w._add_object(xo)})
+        if overlay:
+            mb = page.mediabox
+            buf = io.BytesIO()
+            c = rl_canvas.Canvas(buf, pagesize=(float(mb.right) + 1, float(mb.top) + 1))
+            for item in overlay:
+                _draw_field(c, *item)
+            c.showPage(); c.save(); buf.seek(0)
+            page.merge_page(PdfReader(buf).pages[0])
 
 
 def _h_form_fill(ctx, inputs, opts, out):
@@ -669,26 +901,27 @@ def _draw_stamp(c, label: str, rgb, position: str, dw: float, dh: float, font: s
         size = max(28, min(dw, dh) / 9)
         c.saveState()
         c.translate(dw / 2, dh / 2); c.rotate(30)
-        tw = c.stringWidth(label, font, size)
+        tw = _tw(label, size, font, bold=True)
         c.setStrokeColor(Color(*rgb, alpha=0.55)); c.setFillColor(Color(*rgb, alpha=0.45))
         c.setLineWidth(3)
         c.roundRect(-tw / 2 - 16, -size * 0.45, tw + 32, size * 1.3, 8, stroke=1, fill=0)
-        c.setFont(font, size); c.drawCentredString(0, -size * 0.1, label)
+        _td(c, 0, -size * 0.1, label, size, font, bold=True, align="center")
         c.restoreState()
         return
     size = 16
-    tw = c.stringWidth(label, font, size)
+    tw = _tw(label, size, font, bold=True)
     bw, bh, m = tw + 20, size + 14, 28
     x = m if position.endswith("left") else dw - m - bw
     y = dh - m - bh if position.startswith("top") else m
     c.saveState()
     c.setStrokeColor(col); c.setFillColor(col); c.setLineWidth(2)
     c.roundRect(x, y, bw, bh, 5, stroke=1, fill=0)
-    c.setFont(font, size); c.drawCentredString(x + bw / 2, y + 9, label)
+    _td(c, x + bw / 2, y + 9, label, size, font, bold=True, align="center")
     c.restoreState()
 
 
 def stamp(src: str, out: str, opts: dict) -> int:
+    from office_toolkit import textdraw
     r = _open_reader(src)
     n = len(r.pages)
     kind = opts.get("stamp") or "none"
@@ -706,9 +939,15 @@ def stamp(src: str, out: str, opts: dict) -> int:
         raise ToolkitError("Choose a stamp, page numbers, a header or a footer.")
     targets = _parse_pages(opts.get("ranges"), n)
     font, fontb = _font(), _font(bold=True)
+    unicode_ok = textdraw.available()
     for s in (label or "", header, footer):
-        if font.startswith("Helvetica") and _safe_text(s, font) != s:
+        if not unicode_ok and font.startswith("Helvetica") and _safe_text(s, font) != s:
             raise ToolkitError("Stamps, headers and footers take Latin letters only on this server.")
+        if unicode_ok and textdraw.missing(s):
+            raise ToolkitError("Some letters in the stamp, header or footer cannot be drawn: "
+                               + textdraw.missing(s)[:10])
+    # Nepali or Hindi words around the numbers get Devanagari digits too
+    deva = any(textdraw.has_devanagari(s) for s in (label or "", header, footer))
     numpos = opts.get("number_position") or "bottom-center"
     w = PdfWriter(clone_from=r)
     for i, page in enumerate(w.pages, start=1):
@@ -720,23 +959,34 @@ def stamp(src: str, out: str, opts: dict) -> int:
         c.setFillColor(Color(0.2, 0.2, 0.2))
         c.setFont(font, 9)
         if header:
-            c.drawCentredString(dw / 2, dh - 22, header)
+            _td(c, dw / 2, dh - 22, header, 9, font, align="center")
         if numbers != "none":
-            txt = str(i) if numbers == "n" else f"Page {i} of {n}"
-            if numpos == "bottom-right":
-                c.drawRightString(dw - 30, 18, txt)
-            elif numpos == "top-right":
-                c.drawRightString(dw - 30, dh - 22, txt)
+            if deva:
+                txt = _deva_digits(str(i)) if numbers == "n" else \
+                    f"पृष्ठ {_deva_digits(str(i))} / {_deva_digits(str(n))}"
             else:
-                c.drawCentredString(dw / 2, 18, txt)
+                txt = str(i) if numbers == "n" else f"Page {i} of {n}"
+            if numpos == "bottom-right":
+                _td(c, dw - 30, 18, txt, 9, font, align="right")
+            elif numpos == "top-right":
+                _td(c, dw - 30, dh - 22, txt, 9, font, align="right")
+            else:
+                _td(c, dw / 2, 18, txt, 9, font, align="center")
         if footer:
             if numbers != "none" and numpos == "bottom-center":
-                c.drawString(30, 18, footer)
+                _td(c, 30, 18, footer, 9, font)
             else:
-                c.drawCentredString(dw / 2, 18, footer)
+                _td(c, dw / 2, 18, footer, 9, font, align="center")
         _merge_overlay(page, c, buf)
     _write(w, out)
     return len(targets)
+
+
+_DEVA_DIGITS = str.maketrans("0123456789", "०१२३४५६७८९")
+
+
+def _deva_digits(s: str) -> str:
+    return s.translate(_DEVA_DIGITS)
 
 
 def _h_stamp(ctx, inputs, opts, out):
@@ -858,7 +1108,7 @@ def _record_pages(audit: dict, uploaded_sha: str, size) -> PdfReader:
     cellh = ParagraphStyle("ch", fontName=fb, fontSize=8, leading=10)
 
     def P(s, style=st):
-        return Paragraph(escape(_safe_text(s, f)), style)
+        return Paragraph(_markup(s, f, escape), style)
 
     def footer(c, doc):
         c.saveState(); c.setFont(f, 8); c.setFillColor(Color(0.35, 0.35, 0.35))
@@ -926,13 +1176,13 @@ def sign(src: str, out: str, sigs, images: list[str], audit=None) -> dict:
             y = top - s["h"] + (s["h"] - dhei) / 2
             c.drawImage(reader, x, y, dwid, dhei, mask="auto")
             if s["name"]:
-                line = _safe_text(f"Signed by {s['name']}, {s['date'] or today}", font)
+                line = f"Signed by {s['name']}, {s['date'] or today}"
                 size = 7
                 c.setFont(font, size); c.setFillColor(Color(0.25, 0.25, 0.25))
                 ly = top - s["h"] - size - 1
                 if ly < 2:          # no room under it: put the line inside the bottom edge
                     ly = top - s["h"] + 2
-                c.drawString(s["x"], ly, line)
+                _td(c, s["x"], ly, line, size, font)
         _merge_overlay(page, c, buf)
     if record is not None:
         first = r.pages[0]
@@ -1162,7 +1412,8 @@ def scan_clean(inputs: list[str], out: str, work: str, mode: str, ocr: bool,
             try:
                 proc = subprocess.run(["tesseract", path, base, "-l", language,
                                        "--dpi", str(dpi), "pdf", "txt"],
-                                      capture_output=True, text=True, timeout=OCR_TIMEOUT)
+                                      capture_output=True, text=True, timeout=OCR_TIMEOUT,
+                                      env=dict(os.environ, OMP_THREAD_LIMIT="1"))
             except subprocess.TimeoutExpired:
                 raise ToolkitError(f"Text recognition took too long on photo {i + 1}.")
             if proc.returncode != 0 or not os.path.exists(base + ".pdf"):
