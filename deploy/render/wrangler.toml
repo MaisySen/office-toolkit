@@ -8,4 +8,6 @@ routes = [{ pattern = "doctool.multies.si", custom_domain = true }]
 ORIGIN = "https://multies-doctool.onrender.com"
 
 [triggers]
-crons = ["17 */6 * * *"]
+# Every 10 minutes keeps the free host awake (one service fits the
+# 750 free instance hours a month).
+crons = ["*/10 * * * *"]

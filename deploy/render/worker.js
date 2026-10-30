@@ -22,7 +22,7 @@ export default {
     response.headers.set("Strict-Transport-Security", "max-age=31536000");
     return response;
   },
-  // Keep the free host from sleeping after 48 h without traffic.
+  // Keep the free host from sleeping (it sleeps after 15 minutes idle).
   async scheduled(_event, env, ctx) {
     ctx.waitUntil(fetch(new URL("/healthz", env.ORIGIN)));
   },

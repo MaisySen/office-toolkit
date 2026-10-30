@@ -3,8 +3,8 @@
 v1 runs on free tiers with the app's local accounts (no Keycloak yet).
 
 - App host: Render free web service, Docker runtime, built from this repo
-  with deploy/render/Dockerfile. It sleeps after 15 minutes without traffic;
-  the first request after that waits about a minute.
+  with deploy/render/Dockerfile. It sleeps after 15 minutes without traffic, so
+  the Worker cron pings /healthz every 10 minutes to keep it warm.
 - Edge: a Cloudflare Worker (deploy/render/worker.js, wrangler.toml) owns
   https://doctool.multies.si, adds the shared proxy header and forwards to
   the Render address. The app answers 403 to anything without that header,
