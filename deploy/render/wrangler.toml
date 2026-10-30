@@ -1,0 +1,11 @@
+name = "doctool-proxy"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = false
+routes = [{ pattern = "doctool.multies.si", custom_domain = true }]
+
+[vars]
+ORIGIN = "https://multies-doctool.onrender.com"
+
+[triggers]
+crons = ["17 */6 * * *"]
