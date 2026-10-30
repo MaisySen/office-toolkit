@@ -23,7 +23,8 @@ Worker secret: PROXY_SECRET (same value as DOCTOOL_PROXY_SECRET).
 Engine mode for Multies: TOOLKIT_SERVICE_KEYS (a JSON map of key id to
 secret, ids stg-1 and prod-1) turns on the signed internal job API under
 /internal/v1, and TOOLKIT_ENGINE_ONLY=1 makes every other route answer 404
-(web pages, local accounts, OAuth, /api/run). Multies signs each call; see
+(web pages, local accounts, OAuth, /api/run) and skips the auth database
+snapshots, which only local accounts need. Multies signs each call; see
 office_toolkit/web/service_auth.py and office_toolkit/web/engine.py.
 
 Next steps: Keycloak (needs a host with more memory), SMTP for account mail,
