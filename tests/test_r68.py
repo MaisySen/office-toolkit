@@ -197,3 +197,47 @@ def test_as_number_keeps_codes_as_text():
     assert ops_p2b._as_number("007") == "007"
     assert ops_p2b._as_number("12/10/2026") == "12/10/2026"
     assert ops_p2b._as_number("1234567890123456") == "1234567890123456"
+
+
+# R72: page numbers follow their own setting, not the stamp's language
+
+
+def _nums_text(out):
+    return "\n".join(pg.extract_text() for pg in PdfReader(out).pages)
+
+
+def test_nepali_stamp_keeps_latin_page_numbers_by_default(tmp_path):
+    src = make_pdf(tmp_path / "a.pdf", [["One"], ["Two"], ["Three"]])
+    out = str(tmp_path / "o.pdf")
+    ops_p2a.stamp(src, out, {"stamp": "custom", "stamp_text": "स्वीकृत",
+                             "page_numbers": "page n of N"})
+    txt = _nums_text(out)
+    assert "Page 1 of 3" in txt and "Page 3 of 3" in txt
+    assert "३" not in txt and "पृष्ठ" not in txt
+
+
+def test_page_numbers_devanagari_when_asked(tmp_path):
+    src = make_pdf(tmp_path / "a.pdf", [["One"], ["Two"]])
+    out = str(tmp_path / "o.pdf")
+    ops_p2a.stamp(src, out, {"stamp": "paid", "page_numbers": "n", "number_digits": "devanagari"})
+    assert "MTDeva" in fonts_in(out) or "NotoSansDevanagari" in fonts_in(out)
+    w, h = A4
+    assert ink(out, (w / 2 - 30, h - 30, w / 2 + 30, h - 8)) > 5
+
+
+def test_page_numbers_auto_keeps_r68_behaviour(tmp_path):
+    src = make_pdf(tmp_path / "a.pdf", [["One"]])
+    out_auto = str(tmp_path / "auto.pdf")
+    out_latin = str(tmp_path / "latin.pdf")
+    base = {"stamp": "custom", "stamp_text": "स्वीकृत", "page_numbers": "page n of N"}
+    ops_p2a.stamp(src, out_auto, dict(base, number_digits="auto"))
+    ops_p2a.stamp(src, out_latin, dict(base, number_digits="latin"))
+    assert "Page 1 of 1" not in _nums_text(out_auto)
+    assert "Page 1 of 1" in _nums_text(out_latin)
+
+
+def test_page_number_digits_rejects_unknown(tmp_path):
+    import pytest
+    src = make_pdf(tmp_path / "a.pdf", [["One"]])
+    with pytest.raises(Exception):
+        ops_p2a.stamp(src, str(tmp_path / "o.pdf"), {"page_numbers": "n", "number_digits": "roman"})

@@ -946,8 +946,14 @@ def stamp(src: str, out: str, opts: dict) -> int:
         if unicode_ok and textdraw.missing(s):
             raise ToolkitError("Some letters in the stamp, header or footer cannot be drawn: "
                                + textdraw.missing(s)[:10])
-    # Nepali or Hindi words around the numbers get Devanagari digits too
-    deva = any(textdraw.has_devanagari(s) for s in (label or "", header, footer))
+    # R72: page numbers follow their own setting, not the language of the stamp,
+    # header or footer. Latin digits unless asked: "devanagari" always, "auto"
+    # (the R68 behaviour) when Nepali or Hindi words are on the page.
+    digits = opts.get("number_digits") or "latin"
+    if digits not in NUMBER_DIGITS:
+        raise ToolkitError("Page number digits: choose latin, devanagari or auto.")
+    deva = digits == "devanagari" or (
+        digits == "auto" and any(textdraw.has_devanagari(s) for s in (label or "", header, footer)))
     numpos = opts.get("number_position") or "bottom-center"
     w = PdfWriter(clone_from=r)
     for i, page in enumerate(w.pages, start=1):
@@ -983,6 +989,7 @@ def stamp(src: str, out: str, opts: dict) -> int:
 
 
 _DEVA_DIGITS = str.maketrans("0123456789", "०१२३४५६७८९")
+NUMBER_DIGITS = ("latin", "devanagari", "auto")
 
 
 def _deva_digits(s: str) -> str:
@@ -1493,6 +1500,8 @@ OPERATIONS = {
                 choices=("none", "n", "page n of N")),
          Option("number_position", "choice", "Page number position", default="bottom-center",
                 choices=("bottom-center", "bottom-right", "top-right")),
+         Option("number_digits", "choice", "Page number digits", default="latin",
+                choices=NUMBER_DIGITS),
          Option("header", "text", "Header", max_len=120),
          Option("footer", "text", "Footer", max_len=120),
          Option("ranges", "ranges", "Pages", max_len=200)),
