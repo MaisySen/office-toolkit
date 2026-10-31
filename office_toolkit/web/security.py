@@ -69,7 +69,19 @@ def sniff_ext(path: str, ext: str) -> None:
             if not (e.reason == "unexpected end of data" and len(head) == 64 * 1024):
                 raise ToolkitError("That file is not UTF-8 text.")
         return
+    extra = _extra_sniffers().get(ext)
+    if extra:
+        return extra(path, ext)
     raise ToolkitError("That file type is not supported.")
+
+
+def _extra_sniffers() -> dict:
+    """R86: video, audio, HEIC and e-book checks live beside their ops."""
+    try:
+        from office_toolkit.ops_r86 import SNIFFERS
+    except ModuleNotFoundError:
+        return {}
+    return SNIFFERS
 
 
 def page_count_guard(path: str) -> None:

@@ -16,6 +16,11 @@ file; full audit in docs/dependencies.md):
 - requests - Apache-2.0
 - Tesseract OCR (invoked as an external tool) - Apache-2.0
 - LibreOffice (invoked as an external tool, conversion feature only) - MPL-2.0
+- FFmpeg, LGPL build from BtbN/FFmpeg-Builds (invoked as an external tool for
+  video and audio; configured without --enable-gpl and --enable-nonfree) -
+  LGPL-3.0-or-later, with OpenH264 (BSD-2-Clause), libvpx (BSD-3-Clause),
+  libopus (BSD-3-Clause) and LAME (LGPL-2.0) inside it. Source:
+  https://ffmpeg.org and https://github.com/BtbN/FFmpeg-Builds
 
-All are used unmodified. MPL-2.0 components remain under their own
+All are used unmodified. MPL-2.0 and LGPL components remain under their own
 licence; their source is available from their respective projects.

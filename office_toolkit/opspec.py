@@ -25,6 +25,10 @@ PNG = "image/png"
 # Output file extension -> content type, for ops whose output depends on options.
 OUTPUT_TYPES = {".pdf": PDF, ".zip": ZIP, ".docx": DOCX, ".json": JSON, ".xlsx": XLSX,
                 ".csv": CSV, ".txt": TXT, ".md": MD, ".png": PNG}
+# R86: video, audio and photo results.
+OUTPUT_TYPES.update({".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
+                     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
+                     ".gif": "image/gif", ".jpg": "image/jpeg"})
 
 
 def content_type_for(name: str) -> str:

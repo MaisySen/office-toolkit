@@ -100,7 +100,7 @@ _IMAGE_EXT = (".jpg", ".jpeg", ".png")
 
 # P2 op modules: each exposes OPERATIONS and HANDLERS (see opspec.py). A
 # module not in this checkout is skipped; a slug may never replace a P1 op.
-P2_MODULES = ("office_toolkit.ops_p2a", "office_toolkit.ops_p2b")
+P2_MODULES = ("office_toolkit.ops_p2a", "office_toolkit.ops_p2b", "office_toolkit.ops_r86")
 P2_HANDLERS: dict = {}
 
 
