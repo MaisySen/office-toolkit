@@ -11,7 +11,7 @@ FROM python:3.12-slim
 # models, about 22 MB together. fonts-dejavu-core gives the stamp, sign and
 # compare pages a Unicode font (about 3 MB).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libreoffice-writer libreoffice-calc libreoffice-impress tesseract-ocr \
+      libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw tesseract-ocr \
       tesseract-ocr-nep tesseract-ocr-hin tesseract-ocr-chi-sim tesseract-ocr-chi-tra \
       tesseract-ocr-ara tesseract-ocr-vie tesseract-ocr-ind tesseract-ocr-spa \
       tesseract-ocr-fra tesseract-ocr-deu tesseract-ocr-jpn tesseract-ocr-kor \

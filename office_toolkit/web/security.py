@@ -77,11 +77,18 @@ def sniff_ext(path: str, ext: str) -> None:
 
 def _extra_sniffers() -> dict:
     """R86: video, audio, HEIC and e-book checks live beside their ops."""
+    out: dict = {}
     try:
         from office_toolkit.ops_r86 import SNIFFERS
+        out.update(SNIFFERS)
     except ModuleNotFoundError:
-        return {}
-    return SNIFFERS
+        pass
+    try:  # R100b: slides, drawings and GIF images
+        from office_toolkit.ops_r100b import SNIFFERS as R100B
+        out.update(R100B)
+    except ModuleNotFoundError:
+        pass
+    return out
 
 
 def page_count_guard(path: str) -> None:

@@ -29,6 +29,11 @@ OUTPUT_TYPES = {".pdf": PDF, ".zip": ZIP, ".docx": DOCX, ".json": JSON, ".xlsx":
 OUTPUT_TYPES.update({".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm",
                      ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4",
                      ".gif": "image/gif", ".jpg": "image/jpeg"})
+# R100b: slides, drawings and image service results.
+OUTPUT_TYPES.update({".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                     ".odp": "application/vnd.oasis.opendocument.presentation",
+                     ".odg": "application/vnd.oasis.opendocument.graphics",
+                     ".svg": "image/svg+xml", ".webp": "image/webp"})
 
 
 def content_type_for(name: str) -> str:
